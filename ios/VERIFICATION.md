@@ -12,7 +12,7 @@
 
 - `swift test`：33 项 XCTest，0 失败。
 - Xcode `GDirectCoreTests` Scheme，Mac arm64：33 项 XCTest，0 失败，`TEST SUCCEEDED`。
-- Xcode `GDirectLite` Scheme，Debug / generic iOS / arm64 / `CODE_SIGNING_ALLOWED=NO`：`BUILD SUCCEEDED`，包含 SwiftUI 应用、网络核心和图标资源。
+- Xcode `GDirectLite` Scheme，Debug 和 Release / generic iOS / arm64 / `CODE_SIGNING_ALLOWED=NO`：`BUILD SUCCEEDED`，包含 SwiftUI 应用、网络核心和图标资源。
 - 一键入口：`bash scripts/verify.sh`，依次执行 Xcode 核心测试及完整 iPhone 应用构建。
 
 测试覆盖：
