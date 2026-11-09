@@ -134,6 +134,17 @@
     <string name="drive_unsupported">此文件暂不可下载或导出</string>
     <string name="drive_open_folder">打开文件夹</string>
     <string name="drive_download">下载到设备</string>
+    <string name="drive_select_for_download">选择下载</string>
+    <string name="drive_deselect_file">取消选择文件</string>
+    <string name="drive_cancel_selection">取消选择</string>
+    <string name="drive_download_selected">下载所选</string>
+    <string name="drive_selected_count">已选择 %1$d 个文件</string>
+    <string name="drive_selection_limit">一次最多选择 %1$d 个文件。</string>
+    <string name="drive_batch_started">已开始批量下载，可在传输页查看进度或取消。</string>
+    <string name="drive_batch_progress">第 %1$d/%2$d 个文件 ·</string>
+    <string name="drive_batch_result">已下载 %1$d/%2$d 个文件。</string>
+    <string name="drive_batch_saved">文件已保存到 下载/GDirect Lite。</string>
+    <string name="drive_batch_cancelled">剩余下载已取消。</string>
     <string name="drive_download_busy">已有下载正在进行。请等待完成，或返回下载页取消。</string>
     <string name="drive_download_started">下载已开始，可返回下载页查看进度、取消或打开完成的文件。</string>
     <string name="drive_download_failed">无法启动下载。请保持应用在前台并重试。</string>

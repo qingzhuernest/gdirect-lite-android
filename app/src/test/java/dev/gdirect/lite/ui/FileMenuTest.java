@@ -18,12 +18,13 @@ public final class FileMenuTest {
     }
     @Test public void ordinaryFileHasDirectActionsAndOnlyOneSharingEntry()throws Exception{
         List<FileMenu.Action> actions=FileMenu.actions(entry("application/pdf",true,false),false);
-        assertEquals(Arrays.asList(OPEN,DOWNLOAD,DETAILS,SHARE,COPY_LINK,RENAME,STAR,MOVE,TRASH),actions);
+        assertEquals(Arrays.asList(OPEN,DOWNLOAD,SELECT_DOWNLOAD,DETAILS,SHARE,COPY_LINK,RENAME,STAR,MOVE,TRASH),actions);
         assertEquals(1,Collections.frequency(actions,SHARE));assertFalse(actions.contains(DELETE));
     }
     @Test public void restrictedDownloadCannotReappearAsPreview()throws Exception{
         List<FileMenu.Action> actions=FileMenu.actions(entry("application/pdf",false,false),false);
         assertFalse(actions.contains(DOWNLOAD));assertFalse(actions.contains(OPEN));assertTrue(actions.contains(DETAILS));
+        assertFalse(actions.contains(SELECT_DOWNLOAD));
     }
     @Test public void folderCanOpenButCannotOfferAFileDownload()throws Exception{
         List<FileMenu.Action> actions=FileMenu.actions(entry("application/vnd.google-apps.folder",true,false),false);
