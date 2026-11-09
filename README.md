@@ -6,6 +6,7 @@ RouteShelf Java 是独立开发的 Google Drive Android 客户端。应用显示
 
 ## 开始使用
 
+- [Windows 只读开发预览：构建、授权与限制](windows/README.md)
 - [安装、更新和 Google 授权](docs/INSTALL.md)
 - [Android 构建与测试](docs/DEVELOPMENT.md)
 - [文档索引](docs/README.md) · [版本记录](CHANGELOG.md)

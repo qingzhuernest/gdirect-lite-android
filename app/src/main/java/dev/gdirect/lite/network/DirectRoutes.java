@@ -129,7 +129,7 @@ public final class DirectRoutes {
     }
     private static long elapsed(long start){return TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-start);}
     private Route selectInternal(String host,Set<String> failed,long operation,boolean recheck)throws IOException {
-        if (!DirectNet.googleHost(host)) throw new IOException("不允许的直连域名");
+        if (!DirectNet.googleHost(host) && !host.equals("oauth2.googleapis.com")) throw new IOException("不允许的直连域名");
         try { gate.lockInterruptibly(); }
         catch (InterruptedException error) { Thread.currentThread().interrupt(); throw interrupted(); }
         try {

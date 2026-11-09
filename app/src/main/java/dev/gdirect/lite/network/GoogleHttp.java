@@ -52,7 +52,7 @@ public final class GoogleHttp {
             // HTTP/1.1 avoids cross-origin HTTP/2 connection coalescing and authority ambiguity.
             builder.protocols(Collections.singletonList(Protocol.HTTP_1_1)).addInterceptor(chain->{
                 Request logical=chain.request();
-                if(!logical.url().isHttps()||!logical.url().host().equals(route.host)||!DirectNet.googleHost(route.host)
+                if(!logical.url().isHttps()||!logical.url().host().equals(route.host)||!(DirectNet.googleHost(route.host)||route.host.equals("oauth2.googleapis.com"))
                     ||!logical.url().username().isEmpty()||!logical.url().password().isEmpty())throw new IOException("不允许的前端请求来源");
                 if(!route.host.equals("www.googleapis.com")&&(logical.header("Authorization")!=null||logical.header("X-Goog-Drive-Resource-Keys")!=null))
                     throw new IOException("已阻止向内容服务器发送账户凭据");
