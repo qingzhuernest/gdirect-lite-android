@@ -1,0 +1,1 @@
+<Project><PropertyGroup><GDirectFramework Condition="'$(GDirectFramework)' == ''">net10.0</GDirectFramework><TargetFramework>$(GDirectFramework)</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><TreatWarningsAsErrors>true</TreatWarningsAsErrors><LangVersion>11</LangVersion></PropertyGroup></Project>

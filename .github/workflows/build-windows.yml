@@ -1,0 +1,27 @@
+name: Windows shared-core checks
+on:
+  push:
+    paths: ['windows/**', 'app/src/main/java/**', '.github/workflows/build-windows.yml']
+  pull_request:
+    paths: ['windows/**', 'app/src/main/java/**', '.github/workflows/build-windows.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - name: Restore existing Java dependencies
+        shell: pwsh
+        run: ./windows/restore-java.ps1
+      - name: Test shared Java core and Windows adapter
+        shell: pwsh
+        run: ./windows/check.ps1 -JavaHome $env:JAVA_HOME

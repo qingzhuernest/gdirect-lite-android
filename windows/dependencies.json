@@ -1,0 +1,57 @@
+[
+  {
+    "file": "android-json-0.0.20131108.vaadin1.jar",
+    "sha256": "DFB7BAE2F404CFE0B72B4D23944698CB716B7665171812A0A4D0F5926C0FAC79",
+    "license": "Apache-2.0 except JUnit EPL-1.0 and Hamcrest BSD-3-Clause; see original project notices"
+  },
+  {
+    "file": "annotations-13.0.jar",
+    "sha256": "ACE2A10DC8E2D5FD34925ECAC03E4988B2C0F851650C94B8CEF49BA1BD111478",
+    "license": "Apache-2.0 except JUnit EPL-1.0 and Hamcrest BSD-3-Clause; see original project notices"
+  },
+  {
+    "file": "hamcrest-core-1.3.jar",
+    "sha256": "66FDEF91E9739348DF7A096AA384A5685F4E875584CCE89386A7A47251C4D8E9",
+    "license": "Apache-2.0 except JUnit EPL-1.0 and Hamcrest BSD-3-Clause; see original project notices"
+  },
+  {
+    "file": "junit-4.13.2.jar",
+    "sha256": "8E495B634469D64FB8ACFA3495A065CBACC8A0FFF55CE1E31007BE4C16DC57D3",
+    "license": "Apache-2.0 except JUnit EPL-1.0 and Hamcrest BSD-3-Clause; see original project notices"
+  },
+  {
+    "file": "kotlin-stdlib-1.9.10.jar",
+    "sha256": "55E989C512B80907799F854309F3BC7782C5B3D13932442D0379D5C472711504",
+    "license": "Apache-2.0 except JUnit EPL-1.0 and Hamcrest BSD-3-Clause; see original project notices"
+  },
+  {
+    "file": "kotlin-stdlib-jdk7-1.8.21.jar",
+    "sha256": "33D148DB0E11DEBD0D90677D28242BCED907F9C77730000FD597867089039D86",
+    "license": "Apache-2.0 except JUnit EPL-1.0 and Hamcrest BSD-3-Clause; see original project notices"
+  },
+  {
+    "file": "kotlin-stdlib-jdk8-1.8.21.jar",
+    "sha256": "3DB752A30074F06EE6C57984AA6F27DA44F4D2BBC7F5442651F6988F1CB2B7D7",
+    "license": "Apache-2.0 except JUnit EPL-1.0 and Hamcrest BSD-3-Clause; see original project notices"
+  },
+  {
+    "file": "mockwebserver-4.12.0.jar",
+    "sha256": "6784673687F4AC8F21679B9D4BC7CDB46E1A1CE1BE9D3133B36BEDE59A741561",
+    "license": "Apache-2.0 except JUnit EPL-1.0 and Hamcrest BSD-3-Clause; see original project notices"
+  },
+  {
+    "file": "okhttp-4.12.0.jar",
+    "sha256": "B1050081B14BB7A3A7E55A4D3EF01B5DCFABC453B4573A4FC019767191D5F4E0",
+    "license": "Apache-2.0 except JUnit EPL-1.0 and Hamcrest BSD-3-Clause; see original project notices"
+  },
+  {
+    "file": "okhttp-tls-4.12.0.jar",
+    "sha256": "969896CCA029C2BB436CBDF7DC325DE0F27E5629E246F3920C9B6C2F6BE63AF4",
+    "license": "Apache-2.0 except JUnit EPL-1.0 and Hamcrest BSD-3-Clause; see original project notices"
+  },
+  {
+    "file": "okio-jvm-3.6.0.jar",
+    "sha256": "67543F0736FC422AE927ED0E504B98BC5E269FDA0D3500579337CB713DA28412",
+    "license": "Apache-2.0 except JUnit EPL-1.0 and Hamcrest BSD-3-Clause; see original project notices"
+  }
+]
