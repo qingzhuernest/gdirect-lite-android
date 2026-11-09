@@ -35,13 +35,13 @@ public partial class MainWindow : Window
     }
     private void Remember(OAuthSession value){value.ProfileChanged=profile=>{
         try{profileStore.Save(profile);credentialSaved=true;hasRememberedProfile=true;}
-        catch(Exception e) when(e is IOException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException){credentialSaved=false;}
+        catch(Exception e) when(e is IOException or InvalidDataException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException){credentialSaved=false;}
     };}
     private string AccountSummary()=>credentialSaved?"已授权 · 只读访问 · 登录凭据已由 Windows 加密保存":"已授权 · 只读访问 · 本次凭据未能保存，下次需重新登录";
     private async Task RestoreProfile(){
         DesktopProfile? saved;
         try{saved=profileStore.Load();}
-        catch(Exception e) when(e is IOException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException or System.Text.Json.JsonException){StatusText.Text="无法读取 Windows 加密登录状态，请选择原配置并重新登录。";return;}
+        catch(Exception e) when(e is IOException or InvalidDataException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException or System.Text.Json.JsonException){StatusText.Text="无法读取 Windows 加密登录状态，请选择原配置并重新登录。";return;}
         if(saved==null)return;
         hasRememberedProfile=true;
         config=saved.Configuration;
@@ -75,6 +75,7 @@ public partial class MainWindow : Window
         operation = new CancellationTokenSource(); StatusText.Text = message; Update();
         try { await action(operation.Token); }
         catch (OperationCanceledException) { StatusText.Text = "操作已取消或超时，可重试。"; }
+        catch (InvalidDataException) { StatusText.Text = "授权数据无效，请重新登录。"; }
         catch (Exception e) when (e is HttpRequestException or IOException or InvalidOperationException or KeyNotFoundException or ArgumentException or System.Text.Json.JsonException or System.Security.Cryptography.CryptographicException or System.ComponentModel.Win32Exception) {
             // Never surface raw network/JSON exception text containing private data.
             StatusText.Text = FailureText.Describe(e);
@@ -85,7 +86,8 @@ public partial class MainWindow : Window
         var picker = new OpenFileDialog { Filter="Google 桌面授权配置 (*.json)|*.json" };
         if (picker.ShowDialog() != true) return;
         try { config = DesktopConfig.Load(picker.FileName); AccountText.Text = "桌面授权配置已载入"; StatusText.Text="点击登录；此配置与 Android 客户端独立。"; }
-        catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException or InvalidOperationException or KeyNotFoundException) { StatusText.Text="无法读取配置。请选择 Google 桌面应用的 OAuth JSON。"; }
+        catch (ClientFailure error) { StatusText.Text = FailureText.Describe(error); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidOperationException or KeyNotFoundException) { StatusText.Text="无法读取配置。请选择 Google 桌面应用的 OAuth JSON。"; }
         Update();
     }
     private async void Login(object sender, RoutedEventArgs e) => await Run("请在浏览器中授权，最长等待 3 分钟…", async ct => {

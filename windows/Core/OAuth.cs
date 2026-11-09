@@ -11,11 +11,11 @@ public sealed record DesktopConfig(string ClientId, string ClientSecret)
 {
     public static DesktopConfig Load(string path) {
         using var stream=File.OpenRead(path);
-        if(stream.Length>65536)throw new InvalidDataException("授权配置文件超过大小上限，请选择 Google 下载的原始 JSON。");
+        if(stream.Length>65536)throw new ClientFailure("授权配置文件超过大小上限，请选择 Google 下载的原始 JSON。");
         using var doc = JsonDocument.Parse(stream);
-        if (!doc.RootElement.TryGetProperty("installed", out var app)) throw new InvalidDataException("请选择桌面应用 OAuth JSON，不能使用 Android 或 Web 客户端。");
+        if (!doc.RootElement.TryGetProperty("installed", out var app)) throw new ClientFailure("请选择桌面应用 OAuth JSON，不能使用 Android 或 Web 客户端。");
         var id = app.GetProperty("client_id").GetString() ?? "";
-        if (!id.EndsWith(".apps.googleusercontent.com", StringComparison.Ordinal) || id.Length > 512) throw new InvalidDataException("客户端 ID 无效。");
+        if (!id.EndsWith(".apps.googleusercontent.com", StringComparison.Ordinal) || id.Length > 512) throw new ClientFailure("客户端 ID 无效。");
         return new(id, app.TryGetProperty("client_secret", out var secret) ? secret.GetString() ?? "" : "");
     }
 }
@@ -38,16 +38,16 @@ public sealed class OAuthSession
         foreach (var field in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries)) {
             var pair = field.Split('=', 2);
             var key = Uri.UnescapeDataString(pair[0].Replace('+', ' '));
-            if (!result.TryAdd(key, pair.Length == 2 ? Uri.UnescapeDataString(pair[1].Replace('+',' ')) : "")) throw new InvalidDataException("授权回调包含重复字段。");
+            if (!result.TryAdd(key, pair.Length == 2 ? Uri.UnescapeDataString(pair[1].Replace('+',' ')) : "")) throw new ClientFailure("授权回调包含重复字段，请重新登录。");
         }
         return result;
     }
     public static string CallbackCode(string target, string state) {
-        if (!target.StartsWith("/?", StringComparison.Ordinal)) throw new InvalidDataException("授权回调路径不匹配。");
+        if (!target.StartsWith("/?", StringComparison.Ordinal)) throw new ClientFailure("授权回调路径不匹配，请重新登录。");
         var query = ParseQuery(target[2..]);
-        if (!query.TryGetValue("state", out var actual) || !CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(state), Encoding.UTF8.GetBytes(actual))) throw new InvalidDataException("授权回调校验失败，请重新登录。");
-        if (query.ContainsKey("error")) throw new InvalidDataException("Google 未授予访问权限。");
-        if (!query.TryGetValue("code", out var code) || code.Length is 0 or > 4096) throw new InvalidDataException("授权码缺失。");
+        if (!query.TryGetValue("state", out var actual) || !CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(state), Encoding.UTF8.GetBytes(actual))) throw new ClientFailure("授权回调校验失败，请重新登录。");
+        if (query.ContainsKey("error")) throw new ClientFailure("Google 未授予访问权限，请重试登录。");
+        if (!query.TryGetValue("code", out var code) || code.Length is 0 or > 4096) throw new ClientFailure("授权码无效，请重新登录。");
         return code;
     }
     public async Task Login(CancellationToken ct) {
@@ -96,7 +96,7 @@ public sealed class OAuthSession
         using var json = JsonDocument.Parse(body);
         var root = json.RootElement;
         if (root.GetProperty("token_type").GetString() is not "Bearer") throw new InvalidDataException("授权令牌类型无效。");
-        if (root.TryGetProperty("scope", out var scope) && !scope.GetString()!.Split(' ').Contains("https://www.googleapis.com/auth/drive.readonly")) throw new InvalidDataException("未获得只读云盘权限。");
+        if (root.TryGetProperty("scope", out var scope) && scope.GetString()?.Split(' ').Contains("https://www.googleapis.com/auth/drive.readonly") != true) throw new ClientFailure("未获得只读云盘权限，请重新登录。");
         access = root.GetProperty("access_token").GetString() ?? throw new InvalidDataException();
         expiry = DateTimeOffset.UtcNow.AddSeconds(root.GetProperty("expires_in").GetInt32() - 60);
         if (root.TryGetProperty("refresh_token", out var r)) refresh = r.GetString();

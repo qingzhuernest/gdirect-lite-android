@@ -11,9 +11,16 @@ try{
     try{await JavaBridge.ReadBoundedLine(new StringReader("partial"),10,CancellationToken.None);throw new Exception("partial pipe accepted");}catch(ClientFailure){Check(true,"partial pipe rejected");}
     Check(OAuthSession.Challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")=="E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM","PKCE reference vector");
     Check(OAuthSession.CallbackCode("/?state=fixture&code=code","fixture")=="code","callback accepted");
-    try{OAuthSession.CallbackCode("/?state=bad&code=code","fixture");throw new Exception("state mismatch");}catch(InvalidDataException){Check(true,"state mismatch rejected");}
+    try{OAuthSession.CallbackCode("/?state=bad&code=code","fixture");throw new Exception("state mismatch");}catch(ClientFailure){Check(true,"state mismatch rejected");}
+    try{OAuthSession.CallbackCode("/?state=fixture&error=access_denied&error_description=private-data","fixture");throw new Exception("authorization denial accepted");}
+    catch(ClientFailure error){Check(FailureText.Describe(error)=="Google 未授予访问权限，请重试登录。","denied authorization has a safe retry message");}
     string directory=Path.Combine(Path.GetTempPath(),"gdirect-profile-test-"+Guid.NewGuid().ToString("N"));
     try{
+        Directory.CreateDirectory(directory);
+        string configPath=Path.Combine(directory,"oauth.json");
+        File.WriteAllText(configPath,"{\"web\":{}}");
+        try{DesktopConfig.Load(configPath);throw new Exception("Web OAuth config accepted");}
+        catch(ClientFailure error){Check(FailureText.Describe(error).Contains("桌面应用 OAuth JSON"),"wrong OAuth config has a safe recovery message");}
         var store=new WindowsProfileStore(directory);
         Check(store.Load()==null,"fresh profile has no credentials");
         var profile=new DesktopProfile(new DesktopConfig("fixture.apps.googleusercontent.com","fixture-client-secret"),"fixture-refresh-token");

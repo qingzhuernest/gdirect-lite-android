@@ -31,9 +31,8 @@ public final class DesktopNetwork {
         }, name -> GoogleRangeCatalog.download(trusted,name));
         routes=new DirectRoutes(new DirectRoutes.Candidates(){
             public List<String> get(String host)throws IOException {
-                prepare(); LinkedHashSet<String> found=new LinkedHashSet<>(bootstrap.candidates(space));
-                for(InetAddress address:InetAddress.getAllByName(host)) if(space.contains(address.getHostAddress()))found.add(address.getHostAddress());
-                return new ArrayList<>(found);
+                prepare();
+                return routeCandidates(bootstrap,space,host,Dns.SYSTEM);
             }
             public List<String> expand(String host,List<String> observed)throws IOException {return space.discoveryCandidates(observed,512,new java.security.SecureRandom());}
         },new DirectRoutes.Probe(){
@@ -47,6 +46,18 @@ public final class DesktopNetwork {
             public void remove(String host){cache.remove(host);} public void clear(){cache.clear();}
             public void reject(DirectRoutes.Route route){List<DirectRoutes.Route> rows=cache.get(route.host);if(rows!=null)rows.removeIf(r->r.key().equals(route.key()));}
         },message->{},45000,ip->space.contains(ip)&&DirectRoutes.automaticAddress(ip));
+    }
+    static List<String> routeCandidates(GoogleBootstrap bootstrap, GoogleAddressSpace space, String host, Dns dns) {
+        LinkedHashSet<String> found = new LinkedHashSet<>(bootstrap.candidates(space));
+        try {
+            for (InetAddress address : dns.lookup(host)) {
+                String ip = address.getHostAddress();
+                if (space.contains(ip)) found.add(ip);
+            }
+        } catch (UnknownHostException ignored) {
+            // DNS only adds hints. The caller still verifies the bundled candidates and can expand discovery.
+        }
+        return new ArrayList<>(found);
     }
     private void prepare()throws IOException {
         if(prepared)return;prepared=true;
