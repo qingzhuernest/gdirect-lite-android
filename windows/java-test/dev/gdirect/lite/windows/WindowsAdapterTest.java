@@ -1,8 +1,17 @@
 package dev.gdirect.lite.windows;
 import dev.gdirect.lite.network.*;
+import java.net.UnknownHostException;
 import org.junit.Test;
 import static org.junit.Assert.*;
 public class WindowsAdapterTest {
+    @Test public void dnsFailureKeepsBundledRouteCandidates() throws Exception {
+        GoogleBootstrap bootstrap = GoogleBootstrap.bundled();
+        var expected = bootstrap.candidates(bootstrap.subset);
+        assertFalse(expected.isEmpty());
+        assertEquals(expected, DesktopNetwork.routeCandidates(bootstrap, bootstrap.subset,
+            "oauth2.googleapis.com", host -> { throw new UnknownHostException(host); }));
+    }
+
     @Test public void publicHttpErrorsSurviveCoreAndRemainSanitized()throws Exception{
         for(int status:new int[]{401,403,404,429,503}){
             try{DirectNet.probe(new java.net.URL("https://drive.usercontent.google.com/download?id=private-id"),null,(url,ip)->new PublicResponse(url,status,"application/octet-stream"));fail();}
