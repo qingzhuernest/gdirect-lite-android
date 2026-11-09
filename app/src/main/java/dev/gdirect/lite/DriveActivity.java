@@ -10,6 +10,7 @@ import dev.gdirect.lite.drive.BrowseReconnect;
 import dev.gdirect.lite.drive.DriveSession;
 import dev.gdirect.lite.drive.MutationCoordinator;
 import dev.gdirect.lite.preview.PreviewPolicy;
+import dev.gdirect.lite.transfer.DownloadBatch;
 import dev.gdirect.lite.ui.ConnectionText;
 import dev.gdirect.lite.ui.AppScreens;
 import dev.gdirect.lite.ui.FileMenu;
@@ -52,6 +53,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -67,6 +69,11 @@ public final class DriveActivity extends AppCompatActivity {
     private final Deque<String[]> parents = new ArrayDeque<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final FileAdapter adapter = new FileAdapter();
+    private final LinkedHashMap<String,DriveApi.FileEntry> downloadSelection = new LinkedHashMap<>();
+    private long listingSession = -1;
+    private LinearLayout selectionPanel;
+    private TextView selectionCount;
+    private Button downloadSelected;
     private TextView message, location, transfer, explanation,signInTitle;
     private LinearLayout queryRow,signInPanel,transferPanel;
     private View pathPanel;
@@ -157,7 +164,7 @@ public final class DriveActivity extends AppCompatActivity {
             cancelTransfer.setVisibility(s.active?View.VISIBLE:View.GONE);
             if(transferActive&&!s.active)refreshAfterTransfer=true;
             if(refreshAfterTransfer&&!loading&&!editing&&DriveSession.INSTANCE.connected()) {refreshAfterTransfer=false;load(false);}
-            if (transferActive != s.active) { transferActive = s.active; adapter.notifyDataSetChanged(); }
+            if (transferActive != s.active) { transferActive = s.active; updateSelectionPanel(); adapter.notifyDataSetChanged(); }
             reconnectBrowser();
             handler.postDelayed(this, 500);
         }
@@ -239,7 +246,8 @@ public final class DriveActivity extends AppCompatActivity {
         LinearLayout root=column();root.setPadding(0,0,dp(8),0);root.setFocusableInTouchMode(true);
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override public void handleOnBackPressed() {
-                if (!editing&&(!activeSearch.isEmpty()||search.getText().length()>0)) clearSearch();
+                if (!downloadSelection.isEmpty()) clearDownloadSelection();
+                else if (!editing&&(!activeSearch.isEmpty()||search.getText().length()>0)) clearSearch();
                 else if (!editing&&!parents.isEmpty()) goUp();
                 else {
                     setEnabled(false);
@@ -350,6 +358,21 @@ public final class DriveActivity extends AppCompatActivity {
         android.widget.FrameLayout.LayoutParams floating=new android.widget.FrameLayout.LayoutParams(-2,-2,Gravity.BOTTOM|Gravity.END);
         floating.setMargins(dp(16),dp(16),dp(16),dp(16));content.addView(create,floating);
         container.addView(content,new LinearLayout.LayoutParams(-1,0,1));
+        selectionPanel=column();selectionPanel.setPadding(dp(20),dp(4),dp(20),dp(4));
+        selectionPanel.setBackgroundColor(com.google.android.material.color.MaterialColors.getColor(this,
+            com.google.android.material.R.attr.colorSurfaceContainer,android.graphics.Color.WHITE));
+        selectionCount=label("",14);
+        selectionCount.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        selectionPanel.addView(selectionCount);
+        LinearLayout selectionActions=new LinearLayout(this);
+        Button cancelSelection=button(R.string.drive_cancel_selection);
+        cancelSelection.setOnClickListener(v->clearDownloadSelection());
+        selectionActions.addView(cancelSelection,new LinearLayout.LayoutParams(0,-2,1));
+        downloadSelected=button(R.string.drive_download_selected);
+        downloadSelected.setOnClickListener(v->downloadSelection());
+        selectionActions.addView(downloadSelected,new LinearLayout.LayoutParams(0,-2,1));
+        selectionPanel.addView(selectionActions);
+        container.addView(selectionPanel,new LinearLayout.LayoutParams(-1,-2));
         container.addView(transferPanel,new LinearLayout.LayoutParams(-1,-2));
         navigation=new com.google.android.material.bottomnavigation.BottomNavigationView(this);
         navigation.setLabelVisibilityMode(com.google.android.material.navigation.NavigationBarView.LABEL_VISIBILITY_LABELED);
@@ -509,6 +532,8 @@ public final class DriveActivity extends AppCompatActivity {
     }
 
     private void clearBrowser() {
+        clearDownloadSelection();
+        listingSession = -1;
         reconnect.reset();
         requestVersion++;
         if (listing != null) listing.cancel(true);
@@ -561,6 +586,7 @@ public final class DriveActivity extends AppCompatActivity {
         retry.setText(retryAppend?R.string.drive_retry_more:R.string.drive_retry_list);
         loadingIndicator.setVisibility(loading || editing || authorizing || wasRevoking
             ||GoogleAuthorization.memory(this).state()==RememberedAuthorization.State.RESTORING ? View.VISIBLE : View.GONE);
+        updateSelectionPanel();
         invalidateOptionsMenu();
     }
 
@@ -625,6 +651,7 @@ public final class DriveActivity extends AppCompatActivity {
         DriveSession.Lease lease;
         try { lease = DriveSession.INSTANCE.lease(); }
         catch (DriveSession.AuthorizationRequired error) { clearBrowser(); return; }
+        if (!append || listingSession != lease.id()) clearDownloadSelection();
         GoogleNetwork net=GoogleNetwork.get();
         net.health(); // Observe the live path before binding this listing attempt to its generation.
         reconnect.started(lease.id(),net.healthGeneration(),net.connectionCheck().finishedAt,automatic);
@@ -651,6 +678,7 @@ public final class DriveActivity extends AppCompatActivity {
                         loading=false;listingFailed=true;updateControls();message.setText(invalid.getMessage());return;
                     }
                     nextPage = browser.next();
+                    listingSession = lease.id();
                     reconnect.succeeded();
                     loading = false; adapter.notifyDataSetChanged(); updateControls();
                     message.setText(files.isEmpty() ? getString(R.string.drive_empty) : "");
@@ -688,17 +716,70 @@ public final class DriveActivity extends AppCompatActivity {
     }
 
     private void download(DriveApi.FileEntry file) {
+        startDownload(file,null);
+    }
+    private void downloadSelection() {
+        if (downloadSelection.isEmpty() || loading || editing) return;
+        startDownload(null,new ArrayList<>(downloadSelection.values()));
+    }
+    private void startDownload(DriveApi.FileEntry file,List<DriveApi.FileEntry> selected) {
         if (!DriveSession.INSTANCE.connected()) { clearBrowser(); return; }
         if (DownloadService.snapshot.active) { message.setText(R.string.drive_download_busy); return; }
         if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
             != android.content.pm.PackageManager.PERMISSION_GRANTED) requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS},702);
         Intent request = new Intent(this,DownloadService.class).setAction(DownloadService.ACTION_START);
-        request.putExtra(DownloadService.EXTRA_DRIVE_ID,file.id);
         request.putExtra(DownloadService.EXTRA_THREADS,getSharedPreferences("transfer-settings",MODE_PRIVATE).getInt("workers",4));
-        try { request.putExtra(DownloadService.EXTRA_DRIVE_SESSION,DriveSession.INSTANCE.lease().id()); }
+        try {
+            DriveSession.Lease lease=DriveSession.INSTANCE.lease();
+            request.putExtra(DownloadService.EXTRA_DRIVE_SESSION,lease.id());
+            if (selected==null) {
+                request.putExtra(DownloadService.EXTRA_DRIVE_ID,file.id);
+            } else {
+                if (lease.id()!=listingSession) throw new DriveSession.AuthorizationRequired();
+                String[] ids=new String[selected.size()];
+                for (int i=0;i<ids.length;i++) {
+                    DriveApi.FileEntry entry=selected.get(i);
+                    lease.rememberKey(entry.id,entry.resourceKey);
+                    ids[i]=entry.id;
+                }
+                request.putExtra(DownloadService.EXTRA_DRIVE_IDS,ids);
+            }
+        }
         catch (DriveSession.AuthorizationRequired error) { clearBrowser(); return; }
-        try { startForegroundService(request); message.setText(R.string.drive_download_started); }
+        catch (IOException error) { message.setText(R.string.drive_download_failed); return; }
+        try {
+            startForegroundService(request);
+            if (selected!=null) clearDownloadSelection();
+            message.setText(selected==null?R.string.drive_download_started:R.string.drive_batch_started);
+        }
         catch (RuntimeException error) { message.setText(R.string.drive_download_failed); }
+    }
+    private void toggleDownloadSelection(DriveApi.FileEntry entry) {
+        if (loading || editing || !entry.downloadable || !files.contains(entry)) return;
+        if (DownloadService.snapshot.active) { message.setText(R.string.drive_download_busy); return; }
+        try {
+            if (listingSession!=DriveSession.INSTANCE.lease().id()) { clearBrowser(); return; }
+            if (downloadSelection.remove(entry.id)==null) {
+                if (downloadSelection.size()>=DownloadBatch.LIMIT) {
+                    message.setText(getString(R.string.drive_selection_limit,DownloadBatch.LIMIT));return;
+                }
+                downloadSelection.put(entry.id,entry);
+            }
+            updateSelectionPanel();
+            adapter.notifyDataSetChanged();
+        } catch (DriveSession.AuthorizationRequired error) { clearBrowser(); }
+    }
+    private void clearDownloadSelection() {
+        if (downloadSelection.isEmpty()) return;
+        downloadSelection.clear();
+        updateSelectionPanel();
+        adapter.notifyDataSetChanged();
+    }
+    private void updateSelectionPanel() {
+        int count=downloadSelection.size();
+        selectionPanel.setVisibility(count==0?View.GONE:View.VISIBLE);
+        selectionCount.setText(getString(R.string.drive_selected_count,count));
+        downloadSelected.setEnabled(count>0&&!loading&&!editing&&!DownloadService.snapshot.active);
     }
     private void openShortcut(DriveApi.FileEntry entry) {
         if(loading||editing)return;
@@ -786,6 +867,7 @@ public final class DriveActivity extends AppCompatActivity {
         switch(action){
             case OPEN:return entry.shortcut?R.string.drive_open_shortcut:entry.folder?R.string.drive_open_folder:R.string.drive_preview;
             case DOWNLOAD:return entry.exportMime.isEmpty()?R.string.drive_download:R.string.drive_export;
+            case SELECT_DOWNLOAD:return R.string.drive_select_for_download;
             case DETAILS:return R.string.drive_details;
             case SHARE:return R.string.drive_share;
             case COPY_LINK:return R.string.drive_copy_link;
@@ -802,6 +884,7 @@ public final class DriveActivity extends AppCompatActivity {
         switch(action){
             case OPEN:if(entry.shortcut)openShortcut(entry);else if(entry.folder)enterFolder(entry);else openPreview(entry);break;
             case DOWNLOAD:download(entry);break;
+            case SELECT_DOWNLOAD:toggleDownloadSelection(entry);break;
             case DETAILS:fileDetails(entry);break;
             case SHARE:sharing(entry);break;
             case COPY_LINK:copyLink(entry);break;
@@ -957,7 +1040,10 @@ public final class DriveActivity extends AppCompatActivity {
         @Override public View getView(int n,View old,ViewGroup parent) {
             DriveApi.FileEntry entry=files.get(n);Row row=old!=null&&old.getTag() instanceof FileAdapter.Row?(Row)old.getTag():new Row();
             row.name.setText(entry.name);
-            row.icon.setImageResource(entry.folder?R.drawable.ic_folder:entry.mime.startsWith("image/")?R.drawable.ic_image:entry.mime.startsWith("video/")?R.drawable.ic_video:R.drawable.ic_file);
+            boolean selecting=!downloadSelection.isEmpty(), selected=downloadSelection.containsKey(entry.id);
+            row.root.setBackgroundColor(selected?com.google.android.material.color.MaterialColors.getColor(DriveActivity.this,
+                com.google.android.material.R.attr.colorSecondaryContainer,android.graphics.Color.TRANSPARENT):android.graphics.Color.TRANSPARENT);
+            row.icon.setImageResource(selected?android.R.drawable.checkbox_on_background:entry.folder?R.drawable.ic_folder:entry.mime.startsWith("image/")?R.drawable.ic_image:entry.mime.startsWith("video/")?R.drawable.ic_video:R.drawable.ic_file);
             row.icon.setImageTintList(ColorStateList.valueOf(com.google.android.material.color.MaterialColors.getColor(DriveActivity.this,entry.folder?com.google.android.material.R.attr.colorOnSurfaceVariant:androidx.appcompat.R.attr.colorPrimary,android.graphics.Color.GRAY)));
             boolean previewable=entry.previewable();
             String detail=entry.shortcut?getString(R.string.drive_shortcut):entry.folder?getString(R.string.drive_folder):!entry.exportMime.isEmpty()&&entry.downloadable?getString(R.string.drive_export_format,entry.exportSuffix):entry.downloadable?android.text.format.Formatter.formatFileSize(DriveActivity.this,entry.size):getString(R.string.drive_unsupported);
@@ -968,17 +1054,22 @@ public final class DriveActivity extends AppCompatActivity {
             }catch(java.time.format.DateTimeParseException ignored){}
             row.detail.setText(detail);
             int descriptionAction=entry.trashed?R.string.drive_details:entry.shortcut?R.string.drive_open_shortcut:entry.folder?R.string.drive_open_folder:previewable?R.string.drive_preview:R.string.drive_details;
+            if (selecting&&entry.downloadable) descriptionAction=selected?R.string.drive_deselect_file:R.string.drive_select_for_download;
             row.content.setContentDescription(getString(R.string.drive_action_named,getString(descriptionAction),entry.name+" · "+detail));
             row.name.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);row.detail.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-            row.content.setEnabled(!loading&&!editing);row.content.setFocusable(true);
-            row.content.setOnClickListener(v->{if(!rememberEntry(entry))return;if(entry.trashed)fileDetails(entry);else if(entry.shortcut)openShortcut(entry);else if(entry.folder)enterFolder(entry);else if(previewable)openPreview(entry);else fileDetails(entry);});
+            row.content.setEnabled(!loading&&!editing&&(!selecting||entry.downloadable));row.content.setFocusable(true);
+            row.content.setSelected(selected);
+            row.content.setOnLongClickListener(entry.downloadable?v->{toggleDownloadSelection(entry);return true;}:null);
+            row.content.setOnClickListener(v->{if(!downloadSelection.isEmpty()){toggleDownloadSelection(entry);return;}if(!rememberEntry(entry))return;if(entry.trashed)fileDetails(entry);else if(entry.shortcut)openShortcut(entry);else if(entry.folder)enterFolder(entry);else if(previewable)openPreview(entry);else fileDetails(entry);});
             row.more.setContentDescription(getString(R.string.drive_action_named,getString(R.string.drive_more_actions),entry.name));row.more.setEnabled(!loading&&!editing);
+            row.more.setVisibility(selecting?View.INVISIBLE:View.VISIBLE);
             row.more.setOnClickListener(v->{
                 androidx.appcompat.widget.PopupMenu popup=new androidx.appcompat.widget.PopupMenu(DriveActivity.this,row.more);
                 int menuVersion=requestVersion;
                 for(FileMenu.Action action:FileMenu.actions(entry,currentView==DriveApi.View.DRIVES)){
                     popup.getMenu().add(action.group,action.ordinal()+1,action.ordinal(),fileMenuLabel(action,entry))
-                        .setEnabled(action!=FileMenu.Action.DOWNLOAD||!DownloadService.snapshot.active);
+                        .setEnabled(!DownloadService.snapshot.active ||
+                            (action!=FileMenu.Action.DOWNLOAD && action!=FileMenu.Action.SELECT_DOWNLOAD));
                 }
                 popup.getMenu().setGroupDividerEnabled(true);
                 popup.setOnMenuItemClickListener(item->{

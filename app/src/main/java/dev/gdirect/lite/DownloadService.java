@@ -10,6 +10,7 @@ import dev.gdirect.lite.drive.DriveTransport;
 import dev.gdirect.lite.network.DirectNet;
 import dev.gdirect.lite.network.GoogleHttp;
 import dev.gdirect.lite.network.ReadRetry;
+import dev.gdirect.lite.transfer.DownloadBatch;
 import dev.gdirect.lite.transfer.FileIntegrity;
 import dev.gdirect.lite.transfer.TransferRules;
 import dev.gdirect.lite.transfer.WorkerShutdown;
@@ -64,6 +65,7 @@ public final class DownloadService extends Service {
     static final String EXTRA_IP = "ip";
     static final String EXTRA_THREADS = "threads";
     static final String EXTRA_DRIVE_ID = "drive_id";
+    static final String EXTRA_DRIVE_IDS = "drive_ids";
     static final String EXTRA_DRIVE_SESSION = "drive_session";
     static final String EXTRA_UPLOAD_URI="upload_uri",EXTRA_UPLOAD_PARENT="upload_parent";
     private static final String CHANNEL = "gdirect_downloads";
@@ -85,6 +87,7 @@ public final class DownloadService extends Service {
     private volatile Thread thread;
     private volatile long lastNotification;
     private volatile long startedAt;
+    private volatile String batchProgress = "";
 
     static final class Snapshot {
         final String text;
@@ -131,6 +134,7 @@ public final class DownloadService extends Service {
         String manualIp = intent.getStringExtra(EXTRA_IP);
         int workers = Math.max(1, Math.min(8, intent.getIntExtra(EXTRA_THREADS, 4)));
         String driveId = intent.getStringExtra(EXTRA_DRIVE_ID);
+        String[] driveIds = intent.getStringArrayExtra(EXTRA_DRIVE_IDS);
         String uploadUri=intent.getStringExtra(EXTRA_UPLOAD_URI),uploadParent=intent.getStringExtra(EXTRA_UPLOAD_PARENT);
         long driveSession = intent.getLongExtra(EXTRA_DRIVE_SESSION, -1);
         cancelled.set(false);
@@ -149,15 +153,24 @@ public final class DownloadService extends Service {
                 if(uploadUri!=null) {
                     String uploaded=upload(Uri.parse(uploadUri),uploadParent,driveSession);
                     outcome=new Snapshot("上传完成："+uploaded,bytes.get(),bytes.get(),0,false,true,null,null);
+                } else if (driveIds != null) {
+                    DownloadBatch.Result result = downloadBatch(driveIds,driveSession,workers);
+                    if (!result.complete()) DiagnosticLog.get().record(cancelled.get()?DiagnosticLog.Event.TRANSFER_CANCELLED:DiagnosticLog.Event.TRANSFER_FAILED,
+                        logOperation,null,null,null,DiagnosticLog.elapsed(logStart),0,result.error());
+                    String summary = getString(R.string.drive_batch_result,result.saved(),result.total());
+                    if (result.complete()) summary += getString(R.string.drive_batch_saved);
+                    else if (cancelled.get()) summary += getString(R.string.drive_batch_cancelled);
+                    else summary += " " + explain(result.error());
+                    outcome = new Snapshot(summary,result.bytes(),result.bytes(),0,false,result.complete(),null,null);
                 } else {
-                String mimeAndUri = driveId == null ? download(link, manualIp, workers) : downloadPrivate(driveId, driveSession,workers);
-                String[] parts = mimeAndUri.split("\\|", 2);
-                outcome = new Snapshot("下载完成，文件已保存到 下载/GDirect Lite", bytes.get(), bytes.get(), 0,
-                    false, true, parts[1], parts[0]);
+                    String mimeAndUri = driveId == null ? download(link, manualIp, workers) : downloadPrivate(driveId, driveSession,workers);
+                    String[] parts = mimeAndUri.split("\\|", 2);
+                    outcome = new Snapshot("下载完成，文件已保存到 下载/GDirect Lite", bytes.get(), bytes.get(), 0,
+                        false, true, parts[1], parts[0]);
                 }
             } catch (Exception ex) {
                 DiagnosticLog.get().record(cancelled.get()?DiagnosticLog.Event.TRANSFER_CANCELLED:DiagnosticLog.Event.TRANSFER_FAILED,logOperation,null,null,null,DiagnosticLog.elapsed(logStart),0,ex);
-                String canceledMessage = uploadUri!=null?"上传已停止；Google 可能已接收部分或完整内容，请刷新列表核对。应用暂存已清理。":driveId == null ? "已取消；支持续传的已完成分块可在下次重试时使用。"
+                String canceledMessage = uploadUri!=null?"上传已停止；Google 可能已接收部分或完整内容，请刷新列表核对。应用暂存已清理。":driveId == null && driveIds == null ? "已取消；支持续传的已完成分块可在下次重试时使用。"
                     : "已取消私人文件下载；临时内容已清理。";
                 outcome = new Snapshot((cancelled.get() ? canceledMessage : (uploadUri!=null?"上传失败：":"下载失败：") + explain(ex)),
                     bytes.get(), snapshot.total, 0, false, false, null, null);
@@ -193,7 +206,7 @@ public final class DownloadService extends Service {
         long elapsed = Math.max(1000, SystemClock.elapsedRealtime() - startedAt);
         long done = bytes.get();
         Snapshot old = snapshot;
-        snapshot = new Snapshot(message, done, total, done * 1000L / elapsed, true, false,
+        snapshot = new Snapshot(batchProgress + message, done, total, done * 1000L / elapsed, true, false,
             old.savedUri, old.mime);
         long now = SystemClock.elapsedRealtime();
         if (now - lastNotification > 1200) {
@@ -279,7 +292,23 @@ public final class DownloadService extends Service {
         } finally {source.delete();}
     }
 
-    private String downloadPrivate(String id, long expectedSession,int workers) throws Exception {
+    private DownloadBatch.Result downloadBatch(String[] ids,long expectedSession,int workers) throws IOException {
+        try {
+            return DownloadBatch.run(ids,() -> {
+                requireNotCancelled();
+                if (DriveSession.INSTANCE.lease().id()!=expectedSession) throw new DriveSession.AuthorizationRequired();
+            },(id,position,total) -> {
+                batchProgress=getString(R.string.drive_batch_progress,position,total)+" ";
+                startedAt=SystemClock.elapsedRealtime();
+                bytes.set(0);
+                status("准备下载…",-1);
+                downloadPrivate(id,expectedSession,workers);
+                return bytes.get();
+            });
+        } finally { batchProgress=""; }
+    }
+
+    private String downloadPrivate(String id, long expectedSession,int workers) throws IOException {
         return ReadRetry.run(() -> {
             bytes.set(0);
             try { return downloadPrivateOnce(id,expectedSession,workers); }
