@@ -26,7 +26,13 @@ public final class DirectNet {
     /** Fixed public-download failure categories; never contains URLs or response bodies. */
     public static final class PublicFailure extends IOException {
         public final int status;
-        public PublicFailure(int status) { super("Public download rejected"); this.status=status; }
+        public PublicFailure(int status) {
+            this(status, "Google Drive 返回 HTTP " + status + "；请确认文件公开可访问");
+        }
+        private PublicFailure(int status, String message) {
+            super(message);
+            this.status = status;
+        }
     }
 
     public static final class Probe {
@@ -145,7 +151,7 @@ public final class DirectNet {
                     String page = readLimited(connection.getInputStream(), 48000);
                     URL confirmation = confirmationPage(actual, page);
                     if (confirmation == null) {
-                        throw new PublicFailure(0);
+                        throw new PublicFailure(0, "Google 返回确认/登录网页；请检查共享权限或下载限额");
                     }
                     url = confirmation;
                     continue;
@@ -159,7 +165,7 @@ public final class DirectNet {
                 return new Probe(actual, size, range && size > 0, name, connection.getHeaderField("ETag"));
             } finally { connection.disconnect(); }
         }
-        throw new PublicFailure(0);
+        throw new PublicFailure(0, "Google 下载确认页面重复出现");
     }
 
     private static String readLimited(InputStream in, int limit) throws IOException {
