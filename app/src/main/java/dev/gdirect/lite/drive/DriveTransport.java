@@ -16,9 +16,12 @@ public final class DriveTransport {
     public interface Connections { HttpsURLConnection open(URL url) throws IOException; }
     private final DriveSession.Lease lease;
     private final Connections connections;
-    private final Runnable unauthorized;
+    private final java.util.function.Consumer<String> unauthorized;
 
     public DriveTransport(DriveSession.Lease lease, Connections connections, Runnable unauthorized) {
+        this(lease,connections,token->unauthorized.run());
+    }
+    public DriveTransport(DriveSession.Lease lease,Connections connections,java.util.function.Consumer<String> unauthorized){
         this.lease = lease; this.connections = connections; this.unauthorized = unauthorized;
     }
 
@@ -41,10 +44,14 @@ public final class DriveTransport {
         String[] segments=url.getPath().split("/");return open(url,segments.length>=5?segments[4]:null,range,validator);
     }
     private HttpsURLConnection open(URL url,String resourceId,String range,String validator)throws IOException {
+        return open(url,resourceId,range,validator,0);
+    }
+    private HttpsURLConnection open(URL url,String resourceId,String range,String validator,int tokenRetry)throws IOException {
         requireApiUrl(url);
-        String token = lease.token();
+        lease.requireCurrent();
         HttpsURLConnection c = connections.open(url);
         try {
+            String token = lease.token();
             c.setInstanceFollowRedirects(false);
             c.setConnectTimeout(10000);
             c.setReadTimeout(20000);
@@ -69,7 +76,10 @@ public final class DriveTransport {
             }
             lease.requireCurrent();
             if (code == 401) {
-                if(!content){unauthorized.run();throw new DriveSession.AuthorizationRequired();}
+                if(!content){
+                    if(tokenRetry==0&&!token.equals(lease.renewalToken())){c.disconnect();return open(url,resourceId,range,validator,1);}
+                    unauthorized.accept(token);throw new DriveSession.AuthorizationRequired();
+                }
                 throw new IOException("文件内容链接已过期，请重新下载");
             }
             if (code == 403) throw new IOException("Google 拒绝访问：请检查文件下载权限、Drive API 配置或配额");
@@ -112,7 +122,7 @@ public final class DriveTransport {
         HttpsURLConnection c=connections.open(url);
         try {
             c.setInstanceFollowRedirects(false);c.setConnectTimeout(10000);c.setReadTimeout(20000);
-            c.setRequestMethod(method);c.setRequestProperty("Authorization","Bearer "+lease.token());
+            String token=lease.token();c.setRequestMethod(method);c.setRequestProperty("Authorization","Bearer "+token);
             if(expectedEtag!=null){String strong=TransferRules.strongEtag(expectedEtag);if(strong==null)throw new IOException("文件版本标识无效");c.setRequestProperty("If-Match",strong);}
             String[] parts=url.getPath().split("/");String resource=lease.resourceHeader(parts.length>=5?parts[4]:null);if(resource!=null)c.setRequestProperty("X-Goog-Drive-Resource-Keys",resource);
             c.setRequestProperty("Content-Type","application/json; charset=utf-8");
@@ -121,7 +131,7 @@ public final class DriveTransport {
                 try(java.io.OutputStream out=c.getOutputStream()){out.write(body);}
             }
             int code=c.getResponseCode();lease.requireCurrent();
-            if(code==401){unauthorized.run();throw new DriveSession.AuthorizationRequired();}
+            if(code==401){unauthorized.accept(token);throw new DriveSession.AuthorizationRequired();}
             if(code==403)throw new IOException("没有执行此文件操作的权限");
             if(code==404)throw new IOException("文件不存在或已无权访问");
             if(code==412)throw new IOException("文件状态已经改变，请刷新后重新确认操作");
@@ -153,11 +163,11 @@ public final class DriveTransport {
         URL url=new URL("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=id,name,mimeType,size,md5Checksum,capabilities/canDownload");
         HttpsURLConnection c=connections.open(url);
         try {
-            prepareUpload(c,"POST","application/json; charset=utf-8");
+            String token=prepareUpload(c,"POST","application/json; charset=utf-8");
             c.setRequestProperty("X-Upload-Content-Type",mime);c.setRequestProperty("X-Upload-Content-Length",Long.toString(size));
             try(java.io.OutputStream out=c.getOutputStream()){out.write(json.getBytes(StandardCharsets.UTF_8));}
             int code=c.getResponseCode();lease.requireCurrent();
-            if(code==401){unauthorized.run();throw new DriveSession.AuthorizationRequired();}
+            if(code==401){unauthorized.accept(token);throw new DriveSession.AuthorizationRequired();}
             if(code!=200&&code!=201)throw new IOException("无法建立上传会话（HTTP "+code+"）");
             String location=c.getHeaderField("Location");
             if(location==null)throw new IOException("Google 未返回上传会话");
@@ -166,21 +176,22 @@ public final class DriveTransport {
             requireUploadSession(session);return session;
         } finally {c.disconnect();}
     }
-    private void prepareUpload(HttpsURLConnection c,String method,String mime)throws IOException {
+    private String prepareUpload(HttpsURLConnection c,String method,String mime)throws IOException {
         lease.requireWrite();c.setInstanceFollowRedirects(false);c.setConnectTimeout(10000);c.setReadTimeout(30000);
-        c.setRequestMethod(method);c.setRequestProperty("Authorization","Bearer "+lease.token());
+        String token=lease.token();c.setRequestMethod(method);c.setRequestProperty("Authorization","Bearer "+token);
         c.setRequestProperty("Content-Type",mime);c.setDoOutput(true);
+        return token;
     }
     public UploadTransfer.Reply uploadChunk(URL session,String mime,long start,byte[] bytes,long total)throws IOException {
         requireUploadSession(session);lease.requireWrite();
         if(total<1||start<0||start>total||bytes.length>UploadTransfer.CHUNK||bytes.length>total-start)throw new IOException("上传块范围无效");
         HttpsURLConnection c=connections.open(session);
         try {
-            prepareUpload(c,"PUT",mime);
+            String token=prepareUpload(c,"PUT",mime);
             c.setRequestProperty("Content-Range",bytes.length==0?"bytes */"+total:"bytes "+start+"-"+(start+bytes.length-1)+"/"+total);
             try(java.io.OutputStream out=c.getOutputStream()){out.write(bytes);}
             int code=c.getResponseCode();lease.requireCurrent();
-            if(code==401){unauthorized.run();throw new DriveSession.AuthorizationRequired();}
+            if(code==401){unauthorized.accept(token);throw new DriveSession.AuthorizationRequired();}
             if(code==308) {
                 String range=c.getHeaderField("Range");long offset=0;
                 if(range!=null) {

@@ -17,13 +17,17 @@ public final class RememberedAuthorizationTest {
         public void clear(){profile=null;}
     }
     private static final class Fixture {
-        final DriveSession session=new DriveSession();final Storage store;
+        final java.util.concurrent.atomic.AtomicLong clock=new java.util.concurrent.atomic.AtomicLong();
+        final DriveSession session=new DriveSession(()->java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(clock.get()));final Storage store;
         final List<RememberedAuthorization.Callback> callbacks=new ArrayList<>();
         final List<RememberedAuthorization.Profile> requests=new ArrayList<>();
-        final java.util.concurrent.atomic.AtomicLong clock=new java.util.concurrent.atomic.AtomicLong();
+        final List<String> previousTokens=new ArrayList<>();
         final RememberedAuthorization memory;
         Fixture(){this(new Storage());}
-        Fixture(Storage store){this.store=store;memory=new RememberedAuthorization(session,store,(profile,callback)->{requests.add(profile);callbacks.add(callback);},(event,code)->{},clock::get);}
+        Fixture(Storage store){this.store=store;memory=new RememberedAuthorization(session,store,new RememberedAuthorization.Provider(){
+            public void restore(RememberedAuthorization.Profile profile,RememberedAuthorization.Callback callback){restore(profile,null,callback);}
+            public void restore(RememberedAuthorization.Profile profile,String previous,RememberedAuthorization.Callback callback){previousTokens.add(previous);requests.add(profile);callbacks.add(callback);}
+        },(event,code)->{},clock::get);}
         void remember(boolean manage){store.profile=new RememberedAuthorization.Profile(FIRST,manage);}
         RememberedAuthorization.Callback callback(){return callbacks.get(callbacks.size()-1);}
     }
@@ -161,5 +165,38 @@ public final class RememberedAuthorizationTest {
         f.clock.set(5000);f.memory.restore(1,true);f.callback().success(FIRST,"token",READ);
         f.session.disconnect();assertTrue(f.memory.restore(1,true));f.callback().failed(7);
         f.clock.set(10000);assertTrue(f.memory.restore(1,true));
+    }
+    @Test public void verifiedRenewalKeepsTheSameAccountLeaseAndResourceKeys()throws Exception {
+        Fixture f=new Fixture();f.remember(false);f.memory.restore(1,true);f.callback().success(FIRST,"initial",READ);
+        DriveSession.Lease lease=f.session.lease();lease.rememberKey("file","key");
+        f.clock.set(45*60000);assertTrue(f.memory.restore(1,true));
+        assertEquals("initial",f.previousTokens.get(1));
+        f.callback().success(FIRST,"renewed",MANAGE);
+        assertEquals(lease.id(),f.session.lease().id());assertEquals("renewed",lease.token());assertEquals("file/key",lease.resourceHeader("file"));
+        assertFalse(f.session.writable());
+    }
+    @Test public void consentRequirementDuringRenewalStopsOldAccountWork()throws Exception {
+        Fixture f=new Fixture();f.remember(false);f.memory.restore(1,true);f.callback().success(FIRST,"initial",READ);
+        DriveSession.Lease lease=f.session.lease();f.clock.set(45*60000);f.memory.restore(1,true);f.callback().needsAction();
+        assertThrows(DriveSession.AuthorizationRequired.class,lease::requireCurrent);assertFalse(f.memory.restore(2,true));
+    }
+    @Test public void newRequestWaitsForRenewalWhileAnExistingBodyCanContinue()throws Exception {
+        Fixture f=new Fixture();f.remember(false);f.memory.restore(1,true);f.callback().success(FIRST,"initial",READ);
+        DriveSession.Lease lease=f.session.lease();f.clock.set(51*60000);f.memory.restore(1,true);
+        var entered=new java.util.concurrent.CountDownLatch(1);
+        var request=java.util.concurrent.CompletableFuture.runAsync(()->{entered.countDown();try{f.memory.requireFresh(lease,1,true);}catch(java.io.IOException e){throw new java.util.concurrent.CompletionException(e);}});
+        assertTrue(entered.await(1,java.util.concurrent.TimeUnit.SECONDS));lease.requireCurrent();assertFalse(request.isDone());
+        f.callback().success(FIRST,"fresh",READ);request.get(2,java.util.concurrent.TimeUnit.SECONDS);assertEquals("fresh",lease.token());
+    }
+    @Test public void temporaryRenewalFailureDoesNotDiscardTheAuthorizedBody()throws Exception {
+        Fixture f=new Fixture();f.remember(false);f.memory.restore(1,true);f.callback().success(FIRST,"initial",READ);
+        DriveSession.Lease lease=f.session.lease();f.clock.set(51*60000);f.memory.restore(1,true);f.callback().failed(7);
+        lease.requireCurrent();assertThrows(DriveSession.RefreshRequired.class,()->f.memory.requireFresh(lease,1,true));
+        f.clock.addAndGet(5000);assertTrue(f.memory.restore(1,true));f.callback().success(FIRST,"renewed",READ);assertEquals("renewed",lease.token());
+    }
+    @Test public void anOld401CannotDiscardTheSuccessfullyRenewedToken()throws Exception {
+        Fixture f=new Fixture();f.remember(false);f.memory.restore(1,true);f.callback().success(FIRST,"old",READ);
+        DriveSession.Lease lease=f.session.lease();f.clock.set(45*60000);f.memory.restore(1,true);f.callback().success(FIRST,"new",READ);
+        assertNull(f.memory.rejected(lease,"old"));assertEquals("new",lease.token());assertEquals(RememberedAuthorization.State.CONNECTED,f.memory.state());
     }
 }

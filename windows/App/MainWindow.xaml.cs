@@ -17,7 +17,8 @@ public partial class MainWindow : Window
     private readonly List<(string Id, string Name)> path = new() { ("root", "我的云盘") };
     private string query = "";
     private string? next;
-    private bool connected;
+    private readonly AccountState accountState=new();
+    private bool connected=>accountState.Connected;
     private bool listingLoaded;
     private readonly WindowsProfileStore profileStore=new();
     private bool credentialSaved;
@@ -47,7 +48,7 @@ public partial class MainWindow : Window
         config=saved.Configuration;
         await Run("正在通过原项目直连核心恢复登录，无需打开浏览器…",async ct=>{
             var restored=OAuthSession.Restore(transport,saved);Remember(restored);
-            await restored.Token(ct);session=restored;drive=new DriveClient(transport,session);connected=true;
+            await restored.Token(ct);session=restored;drive=new DriveClient(transport,session);accountState.Authorized();
             AccountText.Text=AccountSummary();await Load(false,ct);
         });
     }
@@ -74,6 +75,11 @@ public partial class MainWindow : Window
         if (operation != null) return;
         operation = new CancellationTokenSource(); StatusText.Text = message; Update();
         try { await action(operation.Token); }
+        catch (AuthorizationFailure error) {
+            accountState.HandleFailure(error);session?.Forget();session=null;drive=null;
+            items.Clear();next=null;listingLoaded=false;
+            AccountText.Text="授权已失效，请重新登录";StatusText.Text=FailureText.Describe(error);
+        }
         catch (OperationCanceledException) { StatusText.Text = "操作已取消或超时，可重试。"; }
         catch (InvalidDataException) { StatusText.Text = "授权数据无效，请重新登录。"; }
         catch (Exception e) when (e is HttpRequestException or IOException or InvalidOperationException or KeyNotFoundException or ArgumentException or System.Text.Json.JsonException or System.Security.Cryptography.CryptographicException or System.ComponentModel.Win32Exception) {
@@ -93,14 +99,14 @@ public partial class MainWindow : Window
     private async void Login(object sender, RoutedEventArgs e) => await Run("请在浏览器中授权，最长等待 3 分钟…", async ct => {
         var attempt = new OAuthSession(transport, config!);
         Remember(attempt);
-        await attempt.Login(ct); session = attempt; drive = new DriveClient(transport, session); connected = true;
+        await attempt.Login(ct); session = attempt; drive = new DriveClient(transport, session); accountState.Authorized();
         AccountText.Text = AccountSummary();
         await Load(false, ct);
     });
     private void Logout(object sender, RoutedEventArgs e) {
         try{profileStore.Forget();}catch(Exception error)when(error is IOException or UnauthorizedAccessException){StatusText.Text="无法删除加密登录状态，请重试断开。";return;}
         credentialSaved=hasRememberedProfile=false;
-        session?.Forget(); session = null; drive = null; connected = false; items.Clear(); path.RemoveRange(1,path.Count-1); query=""; next=null;
+        session?.Forget(); session = null; drive = null; accountState.Disconnect(); items.Clear(); path.RemoveRange(1,path.Count-1); query=""; next=null;
         AccountText.Text="已断开"; StatusText.Text="本地会话已清除。可在 Google 账户中撤销应用授权。"; Update();
     }
     private async void Check(object sender, RoutedEventArgs e) => await Run("正在验证数据线路，最长约 55 秒…", async ct => { await transport.Check(ct); StatusText.Text="云盘 API 无凭据检测通过。账户授权和实际下载仍需分别验证。"; });

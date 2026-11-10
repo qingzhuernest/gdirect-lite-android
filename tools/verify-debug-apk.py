@@ -31,8 +31,8 @@ def command(*parts):
 badging = command(args.aapt2, 'dump', 'badging', str(args.apk))
 package = re.search(r"package: name='([^']+)' versionCode='([^']+)' versionName='([^']+)'", badging)
 expected_package = 'dev.gdirect.lite.probe' if args.probe else ('dev.gdirect.lite.preview' if args.preview else 'dev.gdirect.lite')
-expected_version = '0.2.1-diagnostic-probe' if args.probe else '1.0.2-preview'
-expected_code = '3' if args.probe else '24'
+expected_version = '0.2.1-diagnostic-probe' if args.probe else '1.0.3-preview'
+expected_code = '3' if args.probe else '25'
 if not package or package.groups() != (expected_package, expected_code, expected_version):
     raise SystemExit('APK package or diagnostic version does not match the expected build')
 if not args.probe and "application-label:'RouteShelf'" not in badging:
@@ -74,6 +74,7 @@ with zipfile.ZipFile(args.apk) as apk:
                           'Landroidx/preference/PreferenceFragmentCompat;', 'Ldev/gdirect/lite/network/RouteProbeQueue;',
                           'Ldev/gdirect/lite/network/NetworkPathTracker;', 'Ldev/gdirect/lite/auth/RememberedAuthorization;', 'Ldev/gdirect/lite/ConnectionActivity;', 'Ldev/gdirect/lite/TransferActivity;', 'Ldev/gdirect/lite/ui/TransferText;', 'Ldev/gdirect/lite/ui/AppScreens;', 'Ldev/gdirect/lite/ui/FileMenu;',
                           'Ldev/gdirect/lite/network/ConnectionHealth;', 'Ldev/gdirect/lite/ui/ConnectionText;', 'Ldev/gdirect/lite/ui/NavigationSelection;', 'Ldev/gdirect/lite/network/ConnectionCheck;', 'Ldev/gdirect/lite/drive/BrowseReconnect;',
+                          'Ldev/gdirect/lite/drive/SelectionRetention;', 'Ldev/gdirect/lite/DriveActivity$SelectionModel;', 'Ldev/gdirect/lite/drive/DriveSession$RefreshRequired;',
                           'Ldev/gdirect/lite/LogActivity;', 'Ldev/gdirect/lite/diagnostics/DiagnosticLog;', 'Ldev/gdirect/lite/diagnostics/DiagnosticLogStore;']
     if args.probe:
         required_code.append('Ldev/gdirect/lite/probe/PackageProbeActivity;')

@@ -4,6 +4,36 @@ import java.net.UnknownHostException;
 import org.junit.Test;
 import static org.junit.Assert.*;
 public class WindowsAdapterTest {
+    @Test public void onlyAuthorizationFailuresRequestDesktopRelogin()throws Exception{
+        assertEquals("AUTHORIZATION",DesktopWorker.failure(new dev.gdirect.lite.drive.DriveSession.AuthorizationRequired()).getString("errorCode"));
+        assertEquals("REQUEST",DesktopWorker.failure(new java.io.IOException("private-token")).getString("errorCode"));
+        assertFalse(DesktopWorker.failure(new java.io.IOException("private-token")).toString().contains("private-token"));
+    }
+    @Test public void ordinaryHostFailureExpiresWithoutAManualCheck()throws Exception{
+        var now=new java.util.concurrent.atomic.AtomicLong();var calls=new java.util.concurrent.atomic.AtomicInteger();
+        var available=new java.util.concurrent.atomic.AtomicBoolean();
+        okhttp3.OkHttpClient client=new okhttp3.OkHttpClient.Builder().addInterceptor(chain->{
+            calls.incrementAndGet();if(!available.get())throw new java.net.SocketTimeoutException("fixture");
+            return new okhttp3.Response.Builder().request(chain.request()).protocol(okhttp3.Protocol.HTTP_1_1).code(401).message("fixture")
+                .body(okhttp3.ResponseBody.create("{\"error\":{\"code\":401}}",okhttp3.MediaType.get("application/json"))).build();
+        }).build();
+        DesktopNetwork net=new DesktopNetwork(client,now::get);
+        try{
+            assertNull(net.normalClient("www.googleapis.com"));available.set(true);now.set(9999);
+            assertNull(net.normalClient("www.googleapis.com"));assertEquals(1,calls.get());
+            now.set(10000);assertSame(client,net.normalClient("www.googleapis.com"));assertEquals(2,calls.get());
+            assertSame(client,net.normalClient("www.googleapis.com"));assertEquals(2,calls.get());
+        }finally{net.close();}
+    }
+    @Test public void ordinaryFailureRetriesRemainBoundedDuringAnOutage()throws Exception{
+        var now=new java.util.concurrent.atomic.AtomicLong();var calls=new java.util.concurrent.atomic.AtomicInteger();
+        okhttp3.OkHttpClient client=new okhttp3.OkHttpClient.Builder().addInterceptor(chain->{calls.incrementAndGet();throw new java.net.SocketTimeoutException("fixture");}).build();
+        DesktopNetwork net=new DesktopNetwork(client,now::get);
+        try{
+            for(int i=0;i<100;i++)assertNull(net.normalClient("www.googleapis.com"));assertEquals(1,calls.get());
+            now.set(10000);assertNull(net.normalClient("www.googleapis.com"));assertEquals(2,calls.get());
+        }finally{net.close();}
+    }
     @Test public void dnsFailureKeepsBundledRouteCandidates() throws Exception {
         GoogleBootstrap bootstrap = GoogleBootstrap.bundled();
         var expected = bootstrap.candidates(bootstrap.subset);

@@ -90,7 +90,7 @@ public sealed class OAuthSession
         byte[] body=await BoundedBody.Read(response.Content,timeout.Token);
         if (!response.IsSuccessStatusCode){
             using var failure=JsonDocument.Parse(body);
-            if(failure.RootElement.TryGetProperty("error",out var code)&&code.GetString()=="invalid_grant")throw new ClientFailure("Google 要求重新授权（invalid_grant）。请点击登录；测试状态应用的刷新凭据可能受 Google 有效期限制。");
+            if(failure.RootElement.TryGetProperty("error",out var code)&&code.GetString()=="invalid_grant")throw new AuthorizationFailure("Google 要求重新授权（invalid_grant）。请点击登录；测试状态应用的刷新凭据可能受 Google 有效期限制。");
             throw new ClientFailure($"Google 授权服务返回 HTTP {(int)response.StatusCode}，请检查网络后重试。");
         }
         using var json = JsonDocument.Parse(body);
@@ -105,7 +105,7 @@ public sealed class OAuthSession
     public async Task<string> Token(CancellationToken ct) {
         if (access == null && refresh == null) throw new InvalidOperationException("请先登录。");
         if (access == null || DateTimeOffset.UtcNow >= expiry) {
-            if (refresh == null) throw new InvalidOperationException("登录已过期，请重新登录。");
+            if (refresh == null) throw new AuthorizationFailure("登录已过期，请重新登录。");
             await Exchange(new Dictionary<string,string> { ["grant_type"]="refresh_token", ["refresh_token"]=refresh }, ct);
         }
         return access!;

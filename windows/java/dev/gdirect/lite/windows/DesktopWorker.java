@@ -27,10 +27,13 @@ public final class DesktopWorker {
                 if(length<2||length>1048576)break;
                 byte[] data=input.readNBytes(length);if(data.length!=length)break;
                 try{worker.emit(worker.execute(new JSONObject(new String(data,StandardCharsets.UTF_8))));}
-                catch(Exception error){worker.emit(new JSONObject().put("error",safeFailure(error)));}
+                catch(Exception error){worker.emit(failure(error));}
                 finally{Arrays.fill(data,(byte)0);}
             }
         } finally{worker.session.disconnect();worker.network.close();}
+    }
+    static JSONObject failure(Exception error)throws JSONException {
+        return new JSONObject().put("error",safeFailure(error)).put("errorCode",error instanceof DriveSession.AuthorizationRequired?"AUTHORIZATION":"REQUEST");
     }
     static String safeFailure(Exception error){
         if(error instanceof DirectNet.PublicFailure){
@@ -98,7 +101,9 @@ public final class DesktopWorker {
         }
         String current=request.getString("token");
         if(!current.equals(token)||!session.connected()){session.connect(current,Collections.singleton(DriveApi.READONLY_SCOPE),false);token=current;}
-        DriveTransport transport=new DriveTransport(session.lease(),network::open,()->session.disconnect());
+        else session.renew(session.lease(),current,Collections.singleton(DriveApi.READONLY_SCOPE),false);
+        DriveSession.Lease account=session.lease();
+        DriveTransport transport=new DriveTransport(account,network::open,rejected->session.invalidate(account,rejected));
         DriveApi api=new DriveApi(transport);
         if(op.equals("list")){
             String search=request.optString("search","");

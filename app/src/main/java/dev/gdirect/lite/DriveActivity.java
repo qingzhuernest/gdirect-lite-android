@@ -69,7 +69,11 @@ public final class DriveActivity extends AppCompatActivity {
     private final Deque<String[]> parents = new ArrayDeque<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final FileAdapter adapter = new FileAdapter();
-    private final LinkedHashMap<String,DriveApi.FileEntry> downloadSelection = new LinkedHashMap<>();
+    public static final class SelectionModel extends androidx.lifecycle.ViewModel {
+        final dev.gdirect.lite.drive.SelectionRetention<DriveApi.FileEntry> state=new dev.gdirect.lite.drive.SelectionRetention<>();
+    }
+    private dev.gdirect.lite.drive.SelectionRetention<DriveApi.FileEntry> retainedSelection;
+    private LinkedHashMap<String,DriveApi.FileEntry> downloadSelection;
     private long listingSession = -1;
     private LinearLayout selectionPanel;
     private TextView selectionCount;
@@ -120,7 +124,7 @@ public final class DriveActivity extends AppCompatActivity {
             if(wasConnected&&!DriveSession.INSTANCE.connected())clearBrowser();
             if(!authorizing&&!GoogleAuthorization.revoking.get()){
                 RememberedAuthorization memory=GoogleAuthorization.memory(DriveActivity.this);
-                if(!DriveSession.INSTANCE.connected())memory.restore(connectivity.healthGeneration(),connectionHealth.online);
+                memory.restore(connectivity.healthGeneration(),connectionHealth.online);
                 if(!DriveSession.INSTANCE.connected()&&memory.state()!=observedRestore){
                     observedRestore=memory.state();
                     if(observedRestore==RememberedAuthorization.State.RESTORING){authorizationPhase="restoring";message.setText(R.string.drive_restoring);}
@@ -214,6 +218,13 @@ public final class DriveActivity extends AppCompatActivity {
                 }
             }catch(IOException|org.json.JSONException|IllegalArgumentException error){folder="root";folderName=getString(R.string.drive_root);currentView=DriveApi.View.FOLDER;currentSort=DriveApi.Sort.NAME;currentDrive="";activeSearch="";parents.clear();}
         }
+        retainedSelection=new androidx.lifecycle.ViewModelProvider(this).get(SelectionModel.class).state;
+        downloadSelection=retainedSelection.items;
+        try{
+            long id=DriveSession.INSTANCE.lease().id();
+            if(saved!=null&&saved.getLong("browser_session",-1)==id)retainedSelection.recreate(listingContext(id));
+            else retainedSelection.clear();
+        }catch(DriveSession.AuthorizationRequired absent){retainedSelection.clear();}
         waitingResolution = saved != null && saved.getBoolean("waiting_resolution", false);
         authorizing = waitingResolution;
         androidx.core.view.WindowCompat.setDecorFitsSystemWindows(getWindow(),false);
@@ -628,6 +639,7 @@ public final class DriveActivity extends AppCompatActivity {
     private void load(boolean append) {
         load(append,false);
     }
+    private String listingContext(long session){return session+"|"+folder+"|"+currentView+"|"+currentSort+"|"+currentDrive+"|"+activeSearch;}
 
     private void reconnectBrowser(){
         if(authorizing||GoogleAuthorization.revoking.get()||!DriveSession.INSTANCE.connected())return;
@@ -652,7 +664,8 @@ public final class DriveActivity extends AppCompatActivity {
         DriveSession.Lease lease;
         try { lease = DriveSession.INSTANCE.lease(); }
         catch (DriveSession.AuthorizationRequired error) { clearBrowser(); return; }
-        if (!append || listingSession != lease.id()) clearDownloadSelection();
+        String context=listingContext(lease.id());
+        if (!retainedSelection.preserve(context)&&(!append || listingSession != lease.id())) clearDownloadSelection();
         GoogleNetwork net=GoogleNetwork.get();
         net.health(); // Observe the live path before binding this listing attempt to its generation.
         reconnect.started(lease.id(),net.healthGeneration(),net.connectionCheck().finishedAt,automatic);
@@ -661,7 +674,6 @@ public final class DriveActivity extends AppCompatActivity {
         String queryFolder = folder, query = activeSearch;
         DriveApi.View queryView=currentView; DriveApi.Sort querySort=currentSort;
         String queryDrive=currentDrive;
-        String context=lease.id()+"|"+folder+"|"+currentView+"|"+currentSort+"|"+currentDrive+"|"+activeSearch;
         String page=browser.begin(context,append);
         nextPage=browser.next();listingFailed=false;retryAppend=append;adapter.notifyDataSetChanged();
         loading = true; updateControls(); message.setText(R.string.drive_loading);
@@ -680,6 +692,7 @@ public final class DriveActivity extends AppCompatActivity {
                     }
                     nextPage = browser.next();
                     listingSession = lease.id();
+                    retainedSelection.loaded(context);
                     reconnect.succeeded();
                     loading = false; adapter.notifyDataSetChanged(); updateControls();
                     message.setText(files.isEmpty() ? getString(R.string.drive_empty) : "");
@@ -760,6 +773,7 @@ public final class DriveActivity extends AppCompatActivity {
         if (DownloadService.snapshot.active) { message.setText(R.string.drive_download_busy); return; }
         try {
             if (listingSession!=DriveSession.INSTANCE.lease().id()) { clearBrowser(); return; }
+            retainedSelection.bind(listingContext(listingSession));
             if (downloadSelection.remove(entry.id)==null) {
                 if (downloadSelection.size()>=DownloadBatch.LIMIT) {
                     message.setText(getString(R.string.drive_selection_limit,DownloadBatch.LIMIT));return;
@@ -771,8 +785,9 @@ public final class DriveActivity extends AppCompatActivity {
         } catch (DriveSession.AuthorizationRequired error) { clearBrowser(); }
     }
     private void clearDownloadSelection() {
-        if (downloadSelection.isEmpty()) return;
-        downloadSelection.clear();
+        boolean hadSelection=!downloadSelection.isEmpty();
+        retainedSelection.clear();
+        if (!hadSelection) return;
         updateSelectionPanel();
         adapter.notifyDataSetChanged();
     }

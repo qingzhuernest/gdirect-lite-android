@@ -23,7 +23,10 @@ public final class RememberedAuthorization {
         void success(String account,String token,Set<String> scopes);
         void needsAction();void failed(int code);
     }
-    public interface Provider { void restore(Profile profile,Callback callback); }
+    public interface Provider {
+        void restore(Profile profile,Callback callback);
+        default void restore(Profile profile,String previousToken,Callback callback){restore(profile,callback);}
+    }
     public interface Observer { void event(Event event,int code); }
     private final DriveSession session;
     private final Store store;
@@ -56,10 +59,13 @@ public final class RememberedAuthorization {
         return restore(true,networkGeneration,online);
     }
     private boolean restore(boolean automatic,long networkGeneration,boolean online){
-        final Profile profile;final long ticket;
+        final Profile profile;final long ticket;final DriveSession.Lease retained;
         synchronized(this){
-            if(!online||session.connected()||state==State.RESTORING||state==State.NEEDS_ACTION)return false;
+            if(!online||(session.connected()&&!session.refreshDue())||state==State.RESTORING||state==State.NEEDS_ACTION)return false;
             profile=store.read();if(profile==null)return false;
+            DriveSession.Lease existing;
+            try{existing=session.lease();}catch(DriveSession.AuthorizationRequired absent){existing=null;}
+            retained=existing;
             if(state==State.FAILED){
                 // SDK NETWORK_ERROR/TIMEOUT only. Configuration, consent, cancellation and API 401 wait for interaction.
                 if(!automatic||(failureCode!=7&&failureCode!=15))return false;
@@ -79,20 +85,42 @@ public final class RememberedAuthorization {
                     String required=profile.manage?DriveApi.MANAGE_SCOPE:DriveApi.READONLY_SCOPE;
                     boolean readable=scopes!=null&&(scopes.contains(DriveApi.READONLY_SCOPE)||scopes.contains(DriveApi.MANAGE_SCOPE));
                     if(account==null||!profile.account.equalsIgnoreCase(account)||!readable
-                        ||(profile.manage&&!scopes.contains(required))){finish(State.NEEDS_ACTION,Event.AUTH_RESTORE_REQUIRED,0);return;}
-                    try{session.connect(token,scopes,profile.manage);finish(State.CONNECTED,Event.AUTH_RESTORE_OK,0);}
-                    catch(IllegalArgumentException invalid){finish(State.NEEDS_ACTION,Event.AUTH_RESTORE_REQUIRED,0);}
+                        ||(profile.manage&&!scopes.contains(required))){if(retained!=null)session.invalidate(retained);finish(State.NEEDS_ACTION,Event.AUTH_RESTORE_REQUIRED,0);return;}
+                    try{
+                        if(retained==null)session.connect(token,scopes,profile.manage);
+                        else if(!session.renew(retained,token,scopes,profile.manage)){finish(State.NEEDS_ACTION,Event.AUTH_RESTORE_REQUIRED,0);return;}
+                        finish(State.CONNECTED,Event.AUTH_RESTORE_OK,0);
+                    }
+                    catch(IllegalArgumentException invalid){if(retained!=null)session.invalidate(retained);finish(State.NEEDS_ACTION,Event.AUTH_RESTORE_REQUIRED,0);}
                 }
             }
-            public void needsAction(){synchronized(RememberedAuthorization.this){if(ticket==generation&&state==State.RESTORING)finish(State.NEEDS_ACTION,Event.AUTH_RESTORE_REQUIRED,0);}}
+            public void needsAction(){synchronized(RememberedAuthorization.this){if(ticket==generation&&state==State.RESTORING){if(retained!=null)session.invalidate(retained);finish(State.NEEDS_ACTION,Event.AUTH_RESTORE_REQUIRED,0);}}}
             public void failed(int code){synchronized(RememberedAuthorization.this){if(ticket==generation&&state==State.RESTORING){
                 failureCode=code;failedAt=clock.getAsLong();finish(State.FAILED,Event.AUTH_RESTORE_FAILED,code);
             }}}
         };
-        try{provider.restore(profile,callback);}catch(RuntimeException error){callback.failed(-1);}
+        try{provider.restore(profile,retained==null?null:retained.renewalToken(),callback);}
+        catch(DriveSession.AuthorizationRequired stale){callback.needsAction();}
+        catch(RuntimeException error){callback.failed(-1);}
         return true;
     }
-    private void finish(State outcome,Event event,int code){generation++;state=outcome;emit(event,code);}
+    /** Background request boundary only; existing response bodies do not wait for credential refresh. */
+    public void requireFresh(DriveSession.Lease lease,long path,boolean online)throws java.io.IOException {
+        lease.requireCurrent();
+        if(session.connected())return;
+        restore(path,online);
+        long deadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(31);
+        synchronized(this){
+            while(state==State.RESTORING&&!session.connected()){
+                lease.requireCurrent();
+                if(System.nanoTime()-deadline>=0)break;
+                try{wait(100);}catch(InterruptedException stopped){Thread.currentThread().interrupt();throw new java.io.InterruptedIOException("账户更新已取消");}
+            }
+            lease.requireCurrent();
+            if(!session.connected())throw new DriveSession.RefreshRequired();
+        }
+    }
+    private void finish(State outcome,Event event,int code){generation++;state=outcome;emit(event,code);notifyAll();}
     /** Explicit interaction supersedes any older asynchronous restore. */
     public synchronized long beginInteractive(){generation++;state=State.NEEDS_ACTION;return generation;}
     public synchronized void interactiveFailed(long ticket){
@@ -105,13 +133,17 @@ public final class RememberedAuthorization {
         session.connect(token,scopes,allowWrite);
         // A missing selector must never leave an older account scheduled for future restoration.
         if(profile==null)store.clear();else store.write(profile);
-        generation++;state=State.CONNECTED;return true;
+        generation++;state=State.CONNECTED;notifyAll();return true;
     }
-    public synchronized void forget(){generation++;store.clear();session.disconnect();state=State.IDLE;failureCode=0;retries=0;attemptedPath=Long.MIN_VALUE;}
+    public synchronized void forget(){generation++;store.clear();session.disconnect();state=State.IDLE;failureCode=0;retries=0;attemptedPath=Long.MIN_VALUE;notifyAll();}
     /** An API 401 requires a user decision rather than an endless silent reconnect loop. */
     public synchronized String rejected(DriveSession.Lease lease){
         try{
-            String token=lease.token();session.invalidate(lease);generation++;state=State.NEEDS_ACTION;return token;
+            return rejected(lease,lease.renewalToken());
         }catch(DriveSession.AuthorizationRequired stale){return null;}
+    }
+    public synchronized String rejected(DriveSession.Lease lease,String token){
+        if(!session.invalidate(lease,token))return null;
+        generation++;state=State.NEEDS_ACTION;notifyAll();return token;
     }
 }

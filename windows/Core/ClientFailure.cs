@@ -5,9 +5,13 @@ using System.Text.Json;
 namespace GDirect;
 
 // Only application-owned, fixed messages may be shown; never raw exception text.
-public sealed class ClientFailure : IOException
+public class ClientFailure : IOException
 {
     public ClientFailure(string message) : base(message) { }
+}
+public sealed class AuthorizationFailure : ClientFailure
+{
+    public AuthorizationFailure(string message):base(message){}
 }
 public static class FailureText
 {

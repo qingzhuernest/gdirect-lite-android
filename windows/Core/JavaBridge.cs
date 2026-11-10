@@ -41,7 +41,9 @@ internal sealed class JavaBridge : IDisposable
                 if(line.Length>2*1024*1024)throw new ClientFailure("核心响应超过安全上限。");
                 using var json=JsonDocument.Parse(line);var root=json.RootElement;
                 if(root.TryGetProperty("progress",out var bytes)){progress?.Report(bytes.GetInt64());continue;}
-                if(root.TryGetProperty("error",out var error))throw new ClientFailure(error.GetString()??"原项目核心请求失败。");
+                if(root.TryGetProperty("error",out var error)){
+                    throw RequestFailure(root);
+                }
                 return root.Clone();
             }
         }catch(Exception) when(ct.IsCancellationRequested){
@@ -50,6 +52,11 @@ internal sealed class JavaBridge : IDisposable
         }
         catch(Exception error) when(error is IOException or JsonException){ResetWorker();throw;}
         finally{gate.Release();}
+    }
+    internal static ClientFailure RequestFailure(JsonElement root){
+        string message=root.GetProperty("error").GetString()??"原项目核心请求失败。";
+        return root.TryGetProperty("errorCode",out var kind)&&kind.GetString()=="AUTHORIZATION"
+            ?new AuthorizationFailure(message):new ClientFailure(message);
     }
     internal static async Task<string?> ReadBoundedLine(TextReader reader,int limit,CancellationToken ct){
         var text=new StringBuilder(Math.Min(limit,4096));var character=new char[1];

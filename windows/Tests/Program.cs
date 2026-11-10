@@ -6,6 +6,19 @@ using System.Text.Json;
 int passed=0;
 void Check(bool condition,string name){if(!condition)throw new Exception(name);passed++;Console.WriteLine("PASS "+name);}
 try{
+    var accountState=new AccountState();accountState.Authorized();
+    Check(!accountState.HandleFailure(new HttpRequestException())&&accountState.Connected,"network failures preserve authorization");
+    using(var reply=JsonDocument.Parse("{\"error\":\"login required\",\"errorCode\":\"AUTHORIZATION\"}"))
+        Check(JavaBridge.RequestFailure(reply.RootElement) is AuthorizationFailure,"Java authorization failure preserves its type");
+    using(var reply=JsonDocument.Parse("{\"error\":\"request failed\",\"errorCode\":\"REQUEST\"}"))
+        Check(JavaBridge.RequestFailure(reply.RootElement) is not AuthorizationFailure,"ordinary Java failures do not require login");
+    using(var transport=new GoogleTransport(Path.Combine(Path.GetTempPath(),"Resources"))){
+        transport.TokenExchangeFixture=(form,ct)=>Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.BadRequest){Content=new StringContent("{\"error\":\"invalid_grant\"}")});
+        var expired=OAuthSession.Restore(transport,new DesktopProfile(new DesktopConfig("fixture.apps.googleusercontent.com",""),"fixture-refresh"));
+        try{await expired.Token(CancellationToken.None);throw new Exception("expired grant accepted");}
+        catch(AuthorizationFailure error){Check(accountState.HandleFailure(error)&&!accountState.Connected,"invalid grant unlocks login state");}
+        accountState.Authorized();Check(accountState.Connected,"re-login reconnects without an intermediate logout");
+    }
     Check(await JavaBridge.ReadBoundedLine(new StringReader("first\nsecond\n"),5,CancellationToken.None)=="first","bounded pipe line accepted at exact limit");
     try{await JavaBridge.ReadBoundedLine(new StringReader("123456\n"),5,CancellationToken.None);throw new Exception("oversized pipe line accepted");}catch(ClientFailure){Check(true,"oversized pipe rejected during reading");}
     try{await JavaBridge.ReadBoundedLine(new StringReader("partial"),10,CancellationToken.None);throw new Exception("partial pipe accepted");}catch(ClientFailure){Check(true,"partial pipe rejected");}
@@ -24,8 +37,7 @@ try{
         var store=new WindowsProfileStore(directory);
         Check(store.Load()==null,"fresh profile has no credentials");
         var profile=new DesktopProfile(new DesktopConfig("fixture.apps.googleusercontent.com","fixture-client-secret"),"fixture-refresh-token");
-        store.Save(profile);
-        Check(store.Load()==profile,"DPAPI profile survives new read");
+        if(OperatingSystem.IsWindows()){store.Save(profile);Check(store.Load()==profile,"DPAPI profile survives new read");}
         using(var transport=new GoogleTransport(Path.Combine(directory,"Resources"))){
             int exchanges=0;
             transport.TokenExchangeFixture=async(form,ct)=>{
@@ -33,16 +45,19 @@ try{
                 Check(fields.Contains("grant_type=refresh_token")&&fields.Contains("refresh_token=fixture-refresh-token"),"restart uses refresh grant without browser authorization code");
                 return new HttpResponseMessage(System.Net.HttpStatusCode.OK){Content=new StringContent("{\"access_token\":\"fixture-access-token\",\"expires_in\":3600,\"token_type\":\"Bearer\"}")};
             };
-            var restored=OAuthSession.Restore(transport,store.Load()!);restored.ProfileChanged=store.Save;
+            var restored=OAuthSession.Restore(transport,profile);DesktopProfile? renewed=null;
+            restored.ProfileChanged=value=>{renewed=value;if(OperatingSystem.IsWindows())store.Save(value);};
             Check(await restored.Token(CancellationToken.None)=="fixture-access-token","encrypted restart restores usable access token");
-            Check(store.Load()!.RefreshToken==profile.RefreshToken,"refresh response without replacement keeps original refresh token");
+            Check(renewed?.RefreshToken==profile.RefreshToken,"refresh response without replacement keeps original refresh token");
             await restored.Token(CancellationToken.None);Check(exchanges==1,"unexpired access token reused without login");
         }
+        if(OperatingSystem.IsWindows()){
         var encrypted=File.ReadAllBytes(Path.Combine(directory,"account.dpapi"));
         Check(!Encoding.UTF8.GetString(encrypted).Contains("fixture-refresh-token"),"refresh token not plaintext on disk");
         encrypted[^1]^=1;File.WriteAllBytes(Path.Combine(directory,"account.dpapi"),encrypted);
         try{store.Load();throw new Exception("tampered profile accepted");}catch(CryptographicException){Check(true,"tampered ciphertext rejected");}
         store.Save(profile);store.Forget();Check(store.Load()==null,"disconnect removes profile");
+        }else Console.WriteLine("SKIP Windows-only DPAPI round-trip/tamper/delete checks on this platform");
     }finally{if(Directory.Exists(directory))Directory.Delete(directory,true);}
     Check(!FailureText.Describe(new HttpRequestException("token-secret")).Contains("token-secret"),"network errors are sanitized");
     if(args.Length==1){

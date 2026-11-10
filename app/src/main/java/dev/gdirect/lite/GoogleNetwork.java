@@ -214,10 +214,10 @@ public final class GoogleNetwork extends Application {
     }
     public static GoogleNetwork get() { return instance; }
     public String summary() { return systemNetwork() ? "系统网络：遵循设备的 DNS 和代理设置" : summary; }
-    ConnectionHealth.Snapshot health(){refreshNetworkPath();return health.snapshot();}
+    public ConnectionHealth.Snapshot health(){refreshNetworkPath();return health.snapshot();}
     boolean vpnActive(){return vpnActive;}
     String ipv6Summary(){return systemNetwork()?"IPv6：系统网络模式下由 Android 与代理选择地址族":ipv6State.description;}
-    long healthGeneration(){return health.generation();}
+    public long healthGeneration(){return health.generation();}
     void downloadVerified(long generation){health.downloaded(generation);}
     private ConnectionHealth.Problem problem(Throwable error){
         switch(DiagnosticLog.failure(error)){

@@ -28,9 +28,10 @@ public final class DriveTransportTest {
         String retryAfter;
         String uploadLocation,uploadRange;
         String etag;
+        Runnable onResponse=()->{};
         final java.io.ByteArrayOutputStream written=new java.io.ByteArrayOutputStream();
         Fake(URL url, int code) { super(url); this.code = code; }
-        @Override public int getResponseCode() { return code; }
+        @Override public int getResponseCode() { onResponse.run();return code; }
         @Override public void setRequestMethod(String value) { method=value; }
         @Override public java.io.OutputStream getOutputStream(){return written;}
         @Override public InputStream getInputStream() { return new ByteArrayInputStream(body); }
@@ -41,6 +42,37 @@ public final class DriveTransportTest {
         @Override public String getCipherSuite() { return "TEST-ONLY"; }
         @Override public Certificate[] getLocalCertificates() { return null; }
         @Override public Certificate[] getServerCertificates() { return null; }
+    }
+
+    @Test public void aLateOldToken401RetriesAReadWithTheAlreadyRenewedToken()throws Exception {
+        DriveSession s=new DriveSession();s.connect("old");DriveSession.Lease lease=s.lease();
+        URL url=new URL("https://www.googleapis.com/drive/v3/files");Fake first=new Fake(url,401),second=new Fake(url,200);
+        first.onResponse=()->assertTrue(s.renew(lease,"new",java.util.Set.of(DriveApi.READONLY_SCOPE),false));
+        AtomicInteger calls=new AtomicInteger();DriveTransport transport=new DriveTransport(lease,u->calls.incrementAndGet()==1?first:second,rejected->s.invalidate(lease,rejected));
+        assertSame(second,transport.open(url));assertEquals(2,calls.get());assertTrue(first.closed);
+        assertEquals("Bearer old",first.getRequestProperty("Authorization"));assertEquals("Bearer new",second.getRequestProperty("Authorization"));assertTrue(s.connected());
+    }
+    @Test public void tokenRotationDoesNotReplayAWritingRequestOrRejectFreshCredentials()throws Exception {
+        DriveSession s=new DriveSession();s.connect("old",true);DriveSession.Lease lease=s.lease();
+        URL url=new URL("https://www.googleapis.com/drive/v3/files/file");Fake reply=new Fake(url,401);
+        reply.onResponse=()->assertTrue(s.renew(lease,"new",java.util.Set.of(DriveApi.MANAGE_SCOPE),true));
+        AtomicInteger calls=new AtomicInteger();DriveTransport transport=new DriveTransport(lease,u->{calls.incrementAndGet();return reply;},rejected->s.invalidate(lease,rejected));
+        assertThrows(DriveSession.AuthorizationRequired.class,()->transport.mutate(url,"PATCH","{}"));
+        assertEquals(1,calls.get());assertEquals("new",lease.token());
+    }
+    @Test public void requestUsesCredentialsRefreshedByThePlatformOpener()throws Exception {
+        var clock=new java.util.concurrent.atomic.AtomicLong();DriveSession s=new DriveSession(clock::get);s.connect("old");DriveSession.Lease lease=s.lease();
+        clock.set(java.util.concurrent.TimeUnit.MINUTES.toNanos(51));URL url=new URL("https://www.googleapis.com/drive/v3/files");Fake reply=new Fake(url,200);
+        DriveTransport transport=new DriveTransport(lease,u->{assertTrue(s.renew(lease,"fresh",java.util.Set.of(DriveApi.READONLY_SCOPE),false));return reply;},()->fail());
+        transport.open(url);assertEquals("Bearer fresh",reply.getRequestProperty("Authorization"));
+    }
+    @Test public void credentialFreeContentRedirectCanFinishAfterCredentialDeadline()throws Exception {
+        var clock=new java.util.concurrent.atomic.AtomicLong();DriveSession s=new DriveSession(clock::get);s.connect("token");DriveSession.Lease lease=s.lease();
+        URL api=new URL("https://www.googleapis.com/drive/v3/files/file?alt=media"),content=new URL("https://drive.usercontent.google.com/download?id=file");
+        Fake redirect=new Fake(api,302),body=new Fake(content,200);redirect.uploadLocation=content.toString();
+        redirect.onResponse=()->clock.set(java.util.concurrent.TimeUnit.MINUTES.toNanos(51));
+        DriveTransport transport=new DriveTransport(lease,u->{lease.requireCurrent();if(u.getHost().equals("www.googleapis.com"))lease.token();return u.getHost().equals("www.googleapis.com")?redirect:body;},()->fail());
+        assertSame(body,transport.open(api));assertNull(body.getRequestProperty("Authorization"));lease.requireCurrent();
     }
 
     @Test public void nonApiDestinationsAreRejectedBeforeOpening() throws Exception {

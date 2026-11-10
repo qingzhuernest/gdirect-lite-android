@@ -4,6 +4,37 @@ import static org.junit.Assert.*;
 import org.junit.Test;
 
 public final class DriveSessionTest {
+    @Test public void credentialExpiryDoesNotInvalidateAnAuthorizedResponseBody()throws Exception {
+        var clock=new java.util.concurrent.atomic.AtomicLong();DriveSession s=new DriveSession(clock::get);s.connect("old-token");
+        DriveSession.Lease transfer=s.lease();clock.set(java.util.concurrent.TimeUnit.MINUTES.toNanos(51));
+        assertFalse(s.connected());transfer.requireCurrent();assertEquals(transfer.id(),s.lease().id());
+        assertThrows(DriveSession.RefreshRequired.class,transfer::token);
+        assertTrue(s.renew(transfer,"fresh-token",java.util.Set.of(DriveApi.READONLY_SCOPE),false));
+        assertEquals("fresh-token",transfer.token());transfer.requireCurrent();
+    }
+    @Test public void sameAccountRenewalPreservesKeysAndAppliesCurrentPermissionChoice()throws Exception {
+        DriveSession s=new DriveSession();s.connect("token",true);DriveSession.Lease lease=s.lease();lease.rememberKey("file","key");
+        assertTrue(s.renew(lease,"next",java.util.Set.of(DriveApi.MANAGE_SCOPE),false));
+        assertNotEquals(lease.id(),s.lease().id());assertEquals("file/key",s.lease().resourceHeader("file"));
+        assertThrows(DriveSession.AuthorizationRequired.class,lease::requireCurrent);
+        assertThrows(java.io.IOException.class,lease::requireWrite);
+    }
+    @Test public void renewalCannotResurrectALoggedOutOrReplacedAccount()throws Exception {
+        DriveSession s=new DriveSession();s.connect("first");DriveSession.Lease first=s.lease();s.disconnect();
+        assertFalse(s.renew(first,"late",java.util.Set.of(DriveApi.READONLY_SCOPE),false));
+        s.connect("second");assertFalse(s.renew(first,"late",java.util.Set.of(DriveApi.READONLY_SCOPE),false));
+        assertEquals("second",s.lease().token());assertThrows(DriveSession.AuthorizationRequired.class,first::requireCurrent);
+    }
+    @Test public void malformedRenewalPreservesTheCurrentAccount()throws Exception {
+        DriveSession s=new DriveSession();s.connect("first");DriveSession.Lease lease=s.lease();
+        assertThrows(IllegalArgumentException.class,()->s.renew(lease,"bad\nheader",java.util.Set.of(DriveApi.READONLY_SCOPE),false));
+        assertEquals("first",lease.token());
+    }
+    @Test public void proactiveRefreshHasFiveMinutesOfHeadroom()throws Exception {
+        var clock=new java.util.concurrent.atomic.AtomicLong();DriveSession s=new DriveSession(clock::get);s.connect("token");
+        clock.set(java.util.concurrent.TimeUnit.MINUTES.toNanos(44));assertFalse(s.refreshDue());
+        clock.set(java.util.concurrent.TimeUnit.MINUTES.toNanos(45));assertTrue(s.refreshDue());assertTrue(s.connected());
+    }
     @Test public void cachedBroadProviderGrantDoesNotBypassExplicitReadOnlyMode()throws Exception {
         DriveSession session=new DriveSession();session.connect("fixture",java.util.Collections.singleton(DriveApi.MANAGE_SCOPE),false);
         assertTrue(session.connected());assertFalse(session.writable());assertTrue(session.scopes().contains(DriveApi.MANAGE_SCOPE));

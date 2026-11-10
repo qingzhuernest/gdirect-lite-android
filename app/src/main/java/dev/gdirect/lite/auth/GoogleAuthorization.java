@@ -28,18 +28,25 @@ public final class GoogleAuthorization {
             }
             public void write(RememberedAuthorization.Profile profile){prefs.edit().clear().putString("account",profile.account).putBoolean("manage",profile.manage).apply();}
             public void clear(){prefs.edit().clear().apply();}
-        },(profile,callback)->{
+        },new RememberedAuthorization.Provider(){
+          public void restore(RememberedAuthorization.Profile profile,RememberedAuthorization.Callback callback){restore(profile,null,callback);}
+          public void restore(RememberedAuthorization.Profile profile,String previousToken,RememberedAuthorization.Callback callback){
             AuthorizationRequest request=AuthorizationRequest.builder().setAccount(new android.accounts.Account(profile.account,"com.google"))
                 .setRequestedScopes(java.util.Collections.singletonList(new Scope(profile.manage?DriveApi.MANAGE_SCOPE:DriveApi.READONLY_SCOPE))).build();
             android.os.Handler handler=new android.os.Handler(android.os.Looper.getMainLooper());
             Runnable timeout=()->callback.failed(15);handler.postDelayed(timeout,30000);
-            Identity.getAuthorizationClient(app).authorize(request).addOnCompleteListener(task->handler.removeCallbacks(timeout)).addOnSuccessListener(result->{
+            Runnable authorize=()->Identity.getAuthorizationClient(app).authorize(request).addOnCompleteListener(task->handler.removeCallbacks(timeout)).addOnSuccessListener(result->{
                 try{
                     if(result.hasResolution()){callback.needsAction();return;}
                     callback.success(account(result),result.getAccessToken(),new java.util.HashSet<>(result.getGrantedScopes()));
                 }catch(RuntimeException invalid){callback.failed(-1);}
             }).addOnFailureListener(error->callback.failed(error instanceof com.google.android.gms.common.api.ApiException?
                 ((com.google.android.gms.common.api.ApiException)error).getStatusCode():-1));
+            if(previousToken==null)authorize.run();
+            else Identity.getAuthorizationClient(app).clearToken(ClearTokenRequest.builder().setToken(previousToken).build())
+                .addOnSuccessListener(ignored->authorize.run()).addOnFailureListener(error->{handler.removeCallbacks(timeout);callback.failed(error instanceof com.google.android.gms.common.api.ApiException?
+                    ((com.google.android.gms.common.api.ApiException)error).getStatusCode():-1);});
+          }
         },(event,code)->DiagnosticLog.get().record(DiagnosticLog.Event.valueOf(event.name()),0,null,null,null,0,code,null));
         return remembered;
     }
@@ -53,9 +60,17 @@ public final class GoogleAuthorization {
     }
     public static DriveTransport transport(Context context,DriveSession.Lease lease,java.util.function.Consumer<javax.net.ssl.HttpsURLConnection> observer) {
         Context app = context.getApplicationContext();
-        return new DriveTransport(lease, url -> {javax.net.ssl.HttpsURLConnection c=GoogleNetwork.get().open(url,null,lease::requireCurrent);observer.accept(c);return c;}, () -> {
+        return new DriveTransport(lease, url -> {
+            GoogleNetwork net=GoogleNetwork.get();
+            if("www.googleapis.com".equals(url.getHost())){
+                RememberedAuthorization authorization=memory(app);
+                boolean online=net.health().online;long path=net.healthGeneration();
+                authorization.restore(path,online);authorization.requireFresh(lease,path,online);
+            }else lease.requireCurrent();
+            javax.net.ssl.HttpsURLConnection c=net.open(url,null,lease::requireCurrent);observer.accept(c);return c;
+        }, rejectedToken -> {
             try {
-                String rejected = memory(app).rejected(lease);
+                String rejected = memory(app).rejected(lease,rejectedToken);
                 if(rejected!=null)Identity.getAuthorizationClient(app).clearToken(ClearTokenRequest.builder().setToken(rejected).build());
             } catch (RuntimeException ignored) { }
         });

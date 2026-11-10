@@ -11,10 +11,10 @@ import org.json.*;
 
 /** Windows platform composition. Protocol/TLS/discovery remain the app's Java classes. */
 public final class DesktopNetwork {
-    private final OkHttpClient trusted=GoogleTrust.clientBuilder().proxy(Proxy.NO_PROXY)
-        .retryOnConnectionFailure(false).followRedirects(false).followSslRedirects(false)
-        .addNetworkInterceptor(GoogleCertificatePolicy.CHECK).build();
-    private final GoogleHttp.DirectClients clients=new GoogleHttp.DirectClients(trusted);
+    private final OkHttpClient trusted;
+    private final GoogleHttp.DirectClients clients;
+    private final java.util.function.LongSupplier clock;
+    static final long NORMAL_RETRY_MILLIS=10000;
     private final GoogleBootstrap bootstrap;
     private GoogleAddressSpace space;
     private boolean prepared;
@@ -22,8 +22,13 @@ public final class DesktopNetwork {
     private final DirectRoutes routes;
     private final Map<String,List<DirectRoutes.Route>> cache=new HashMap<>();
     private final Map<String,Long> normalVerified=new HashMap<>();
-    private final Set<String> normalFailed=new HashSet<>();
+    private final Map<String,Long> normalFailed=new HashMap<>();
     public DesktopNetwork() throws IOException {
+        this(GoogleTrust.clientBuilder().proxy(Proxy.NO_PROXY).retryOnConnectionFailure(false).followRedirects(false).followSslRedirects(false)
+            .addNetworkInterceptor(GoogleCertificatePolicy.CHECK).build(),()->TimeUnit.NANOSECONDS.toMillis(System.nanoTime()));
+    }
+    DesktopNetwork(OkHttpClient trusted,java.util.function.LongSupplier clock)throws IOException {
+        this.trusted=trusted;this.clock=clock;clients=new GoogleHttp.DirectClients(trusted);
         bootstrap=GoogleBootstrap.bundled();space=bootstrap.subset;
         // Catalog is public, process-local only. Account material never enters it.
         catalog=new GoogleRangeCatalog(new GoogleRangeCatalog.Store(){
@@ -73,25 +78,34 @@ public final class DesktopNetwork {
             } else if(response.code()<200||response.code()>=500||response.code()>=300&&response.code()<400)throw new IOException("Service probe rejected");
         }
     }
+    OkHttpClient normalClient(String host){
+        Long failedAt=normalFailed.get(host);
+        if(failedAt!=null&&clock.getAsLong()-failedAt<NORMAL_RETRY_MILLIS)return null;
+        normalFailed.remove(host);
+        Long checked=normalVerified.get(host);
+        if(checked==null||clock.getAsLong()-checked>TimeUnit.MINUTES.toMillis(5)){
+            try{probe(trusted,host);normalVerified.put(host,clock.getAsLong());}
+            catch(IOException error){normalFailure(host);return null;}
+        }
+        return trusted;
+    }
     public HttpsURLConnection open(URL url)throws IOException {
         String host=url.getHost();
         if(!url.getProtocol().equals("https")||!(DirectNet.googleHost(host)||host.equals("oauth2.googleapis.com"))||url.getUserInfo()!=null||url.getRef()!=null||(url.getPort()!=-1&&url.getPort()!=443))throw new IOException("Origin rejected");
         Set<String> failed=new HashSet<>();DirectRoutes.Route[] selected={null};
         // First allow the genuine Google hostname under the same GTS-only trust
         // policy. This can use normal DNS without expanding IP discovery.
-        boolean[] normal={!normalFailed.contains(host)};
+        boolean[] normal={true};
         return GoogleHttp.open(url,()->{
             if(normal[0]){
-                Long checked=normalVerified.get(host);
-                if(checked==null||System.nanoTime()-checked>TimeUnit.MINUTES.toNanos(5)){
-                    try{probe(trusted,host);normalVerified.put(host,System.nanoTime());}
-                    catch(IOException error){normal[0]=false;normalFailed.add(host);}
-                }
-                if(normal[0])return trusted;
+                OkHttpClient ordinary=normalClient(host);
+                if(ordinary!=null)return ordinary;
+                normal[0]=false;
             }
             selected[0]=routes.select(host,failed);return clients.get(selected[0]);
-        },()->{normal[0]=false;normalFailed.add(host);normalVerified.remove(host);if(selected[0]!=null){failed.add(selected[0].key());routes.reject(selected[0]);}},()->{if(Thread.currentThread().isInterrupted())throw new InterruptedIOException();});
+        },()->{normal[0]=false;normalFailure(host);if(selected[0]!=null){failed.add(selected[0].key());routes.reject(selected[0]);}},()->{if(Thread.currentThread().isInterrupted())throw new InterruptedIOException();});
     }
-    public void check()throws IOException {normalVerified.clear();normalFailed.clear();prepared=false;catalog.retryRefresh();try{probe(trusted,"www.googleapis.com");normalVerified.put("www.googleapis.com",System.nanoTime());}catch(IOException error){normalFailed.add("www.googleapis.com");routes.check("www.googleapis.com");}}
+    private void normalFailure(String host){normalFailed.put(host,clock.getAsLong());normalVerified.remove(host);}
+    public void check()throws IOException {normalVerified.clear();normalFailed.clear();prepared=false;catalog.retryRefresh();try{probe(trusted,"www.googleapis.com");normalVerified.put("www.googleapis.com",clock.getAsLong());}catch(IOException error){normalFailure("www.googleapis.com");routes.check("www.googleapis.com");}}
     public void close(){routes.reset();clients.clear();trusted.dispatcher().executorService().shutdownNow();trusted.connectionPool().evictAll();}
 }
