@@ -2,7 +2,7 @@
 
 # RouteShelf Java
 
-RouteShelf Java 是独立开发的 Google Drive Android 客户端。应用显示名为 RouteShelf（原 GDirect Lite），支持 Android 10 及更新版本。当前为 1.0.1-preview，可浏览、搜索、预览、上传和下载文件。修改文件和共享权限需要用户明确授权。应用可在系统网络之外尝试经 TLS 验证的 Google IPv4 / IPv6 数据端点，见 [双栈连接](docs/IPV6.md)。
+RouteShelf Java 是独立开发的 Google Drive Android 客户端。应用显示名为 RouteShelf（原 GDirect Lite），支持 Android 10 及更新版本。当前为 1.0.2-preview，可浏览、搜索、预览、上传和下载文件。修改文件和共享权限需要用户明确授权。应用可在系统网络之外尝试经 TLS 验证的 Google IPv4 / IPv6 数据端点，见 [双栈连接](docs/IPV6.md)。
 
 ## 开始使用
 

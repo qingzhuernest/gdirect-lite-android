@@ -31,8 +31,8 @@ def command(*parts):
 badging = command(args.aapt2, 'dump', 'badging', str(args.apk))
 package = re.search(r"package: name='([^']+)' versionCode='([^']+)' versionName='([^']+)'", badging)
 expected_package = 'dev.gdirect.lite.probe' if args.probe else ('dev.gdirect.lite.preview' if args.preview else 'dev.gdirect.lite')
-expected_version = '0.2.1-diagnostic-probe' if args.probe else '1.0.1-preview'
-expected_code = '3' if args.probe else '23'
+expected_version = '0.2.1-diagnostic-probe' if args.probe else '1.0.2-preview'
+expected_code = '3' if args.probe else '24'
 if not package or package.groups() != (expected_package, expected_code, expected_version):
     raise SystemExit('APK package or diagnostic version does not match the expected build')
 if not args.probe and "application-label:'RouteShelf'" not in badging:

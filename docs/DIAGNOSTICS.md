@@ -23,6 +23,7 @@
 | CACHE_HIT / SELECT_OK / SELECT_FAILED | 路线复用、选中端点/IP/TLS 或失败 |
 | REQUEST_READ_BEGIN / REQUEST_WRITE_BEGIN / REQUEST_HEADERS | 实际请求启动、TLS 后准备发送；无 URL、头和正文 |
 | REQUEST_RESPONSE / REQUEST_RETRY / BODY_FAILED | 响应状态/耗时、读重试或流中断 |
+| AUTH_RESTORE_RETRY | 官方 SDK 网络错误/超时后的有限静默重试，code 只记录前次 Google 状态码（7/15） |
 | AUTH_RESTORE_BEGIN / AUTH_RESTORE_OK / AUTH_RESTORE_REQUIRED / AUTH_RESTORE_FAILED | 重启/会话过期后的官方授权恢复；只记录阶段与数字状态，不含账户选择或令牌 |
 | AUTH_BEGIN / AUTH_CALLBACK / AUTH_OK / AUTH_FAILED | 官方授权阶段与数字状态；无账户或令牌 |
 | BROWSE_AUTOCONNECT | 自动浏览触发：code 1=账户恢复、2=网络变化、3=一次延迟重试、4=用户线路检测完成后的目录衔接；无私人字段 |

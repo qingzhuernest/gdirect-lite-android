@@ -20,9 +20,10 @@ public final class RememberedAuthorizationTest {
         final DriveSession session=new DriveSession();final Storage store;
         final List<RememberedAuthorization.Callback> callbacks=new ArrayList<>();
         final List<RememberedAuthorization.Profile> requests=new ArrayList<>();
+        final java.util.concurrent.atomic.AtomicLong clock=new java.util.concurrent.atomic.AtomicLong();
         final RememberedAuthorization memory;
         Fixture(){this(new Storage());}
-        Fixture(Storage store){this.store=store;memory=new RememberedAuthorization(session,store,(profile,callback)->{requests.add(profile);callbacks.add(callback);},(event,code)->{});}
+        Fixture(Storage store){this.store=store;memory=new RememberedAuthorization(session,store,(profile,callback)->{requests.add(profile);callbacks.add(callback);},(event,code)->{},clock::get);}
         void remember(boolean manage){store.profile=new RememberedAuthorization.Profile(FIRST,manage);}
         RememberedAuthorization.Callback callback(){return callbacks.get(callbacks.size()-1);}
     }
@@ -102,5 +103,63 @@ public final class RememberedAuthorizationTest {
         assertTrue(f.session.connected());assertFalse(f.session.writable());assertEquals(RememberedAuthorization.State.CONNECTED,f.memory.state());
         assertFalse(f.memory.acceptInteractive(management,"late-manage-token",MANAGE,true,FIRST));
         f.session.disconnect();assertTrue(f.memory.restore());assertFalse(f.requests.get(0).manage);
+    }
+    @Test public void offlineStartupWaitsForNetworkBeforeCallingTheSdk(){
+        Fixture f=new Fixture();f.remember(false);
+        assertFalse(f.memory.restore(1,false));assertTrue(f.requests.isEmpty());
+        assertTrue(f.memory.restore(2,true));assertEquals(FIRST,f.requests.get(0).account);
+        assertFalse(f.memory.restore(2,true));assertEquals(1,f.requests.size());
+    }
+    @Test public void temporarySdkNetworkFailureGetsOneDelayedRetryOnTheSamePath(){
+        Fixture f=new Fixture();f.remember(false);f.memory.restore(1,true);f.callback().failed(7);
+        assertFalse(f.memory.restore(1,true));f.clock.set(4999);assertFalse(f.memory.restore(1,true));
+        f.clock.set(5000);assertTrue(f.memory.restore(1,true));f.callback().failed(7);
+        for(int i=1;i<100;i++){f.clock.set(5000+i*10000);assertFalse(f.memory.restore(1,true));}
+        assertEquals(2,f.requests.size());assertTrue(f.memory.remembered());
+    }
+    @Test public void sdkTimeoutCanRecoverSilentlyWithoutChangingAccountOrReadOnlyChoice(){
+        Fixture f=new Fixture();f.remember(false);f.memory.restore(1,true);f.callback().failed(15);
+        f.clock.set(5000);assertTrue(f.memory.restore(1,true));f.callback().success(FIRST,"fresh-token",MANAGE);
+        assertTrue(f.session.connected());assertFalse(f.session.writable());
+        assertEquals(FIRST,f.requests.get(1).account);assertFalse(f.requests.get(1).manage);
+    }
+    @Test public void aChangedNetworkCanRecoverAnExhaustedRestoreWithoutWaitingAgain(){
+        Fixture f=new Fixture();f.remember(false);f.memory.restore(1,true);f.callback().failed(7);
+        f.clock.set(5000);f.memory.restore(1,true);f.callback().failed(7);
+        assertFalse(f.memory.restore(2,false));assertTrue(f.memory.restore(2,true));
+        f.callback().failed(15);assertFalse(f.memory.restore(2,true));
+        f.clock.set(10000);assertTrue(f.memory.restore(2,true));assertEquals(4,f.requests.size());
+    }
+    @Test public void nonNetworkSdkFailuresNeverRetryAcrossTicksOrPathChanges(){
+        for(int code:new int[]{-1,4,8,10,13,16,12500,12501}){
+            Fixture f=new Fixture();f.remember(false);f.memory.restore(1,true);f.callback().failed(code);
+            f.clock.set(100000);assertFalse(f.memory.restore(1,true));assertFalse(f.memory.restore(2,true));
+            assertEquals(1,f.requests.size());assertTrue(f.memory.remembered());
+        }
+    }
+    @Test public void aRequiredConsentOrApi401DoesNotBecomeAnAutomaticSdkLoop()throws Exception {
+        Fixture f=new Fixture();f.remember(false);f.memory.restore(1,true);f.callback().needsAction();
+        f.clock.set(100000);assertFalse(f.memory.restore(2,true));
+        long ticket=f.memory.beginInteractive();f.memory.acceptInteractive(ticket,"token",READ,false,FIRST);
+        f.memory.rejected(f.session.lease());assertFalse(f.memory.restore(3,true));assertEquals(1,f.requests.size());
+    }
+    @Test public void logoutAndInteractiveAccountSwitchSupersedePendingAutomaticRetry(){
+        Fixture f=new Fixture();f.remember(false);f.memory.restore(1,true);f.callback().failed(7);
+        f.clock.set(5000);f.memory.restore(1,true);RememberedAuthorization.Callback late=f.callback();
+        f.memory.forget();late.success(FIRST,"late-token",READ);assertFalse(f.memory.restore(2,true));
+        f.remember(false);f.memory.restore(2,true);f.callback().failed(15);
+        long ticket=f.memory.beginInteractive();f.memory.acceptInteractive(ticket,"selected-token",READ,false,SECOND);
+        f.clock.set(100000);assertFalse(f.memory.restore(3,true));assertEquals(SECOND,f.store.profile.account);
+    }
+    @Test public void aPathChangeDuringRestoreDoesNotStartASecondConcurrentSdkCall(){
+        Fixture f=new Fixture();f.remember(false);f.memory.restore(1,true);
+        assertFalse(f.memory.restore(2,true));assertEquals(1,f.requests.size());f.callback().failed(7);
+        assertTrue(f.memory.restore(2,true));assertEquals(2,f.requests.size());
+    }
+    @Test public void successfulRecoveryCanRestoreAnExpiredSessionAgain(){
+        Fixture f=new Fixture();f.remember(false);f.memory.restore(1,true);f.callback().failed(7);
+        f.clock.set(5000);f.memory.restore(1,true);f.callback().success(FIRST,"token",READ);
+        f.session.disconnect();assertTrue(f.memory.restore(1,true));f.callback().failed(7);
+        f.clock.set(10000);assertTrue(f.memory.restore(1,true));
     }
 }

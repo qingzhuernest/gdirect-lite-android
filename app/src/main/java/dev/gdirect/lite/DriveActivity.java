@@ -108,10 +108,11 @@ public final class DriveActivity extends AppCompatActivity {
     private final Runnable ticker = new Runnable() {
         @Override public void run() {
             GoogleNetwork connectivity=GoogleNetwork.get();
-            String connectionText=ConnectionText.headline(connectivity.health(),DriveSession.INSTANCE.connected(),
+            dev.gdirect.lite.network.ConnectionHealth.Snapshot connectionHealth=connectivity.health();
+            String connectionText=ConnectionText.headline(connectionHealth,DriveSession.INSTANCE.connected(),
                 !DriveSession.INSTANCE.connected()&&GoogleAuthorization.memory(DriveActivity.this).state()==RememberedAuthorization.State.RESTORING,
                 connectivity.connectionCheck().active());
-            if(DriveSession.INSTANCE.connected()&&reconnect.retryPending()&&connectivity.health().online
+            if(DriveSession.INSTANCE.connected()&&reconnect.retryPending()&&connectionHealth.online
                 &&!connectivity.connectionCheck().active())connectionText="连接暂时中断 · 将自动重试";
             if(connectivity.vpnActive())connectionText+=" · VPN 已开启";
             if(!android.text.TextUtils.equals(connectionIndicator.getText(),connectionText))connectionIndicator.setText(connectionText);
@@ -119,7 +120,7 @@ public final class DriveActivity extends AppCompatActivity {
             if(wasConnected&&!DriveSession.INSTANCE.connected())clearBrowser();
             if(!authorizing&&!GoogleAuthorization.revoking.get()){
                 RememberedAuthorization memory=GoogleAuthorization.memory(DriveActivity.this);
-                if(!DriveSession.INSTANCE.connected())memory.restore();
+                if(!DriveSession.INSTANCE.connected())memory.restore(connectivity.healthGeneration(),connectionHealth.online);
                 if(!DriveSession.INSTANCE.connected()&&memory.state()!=observedRestore){
                     observedRestore=memory.state();
                     if(observedRestore==RememberedAuthorization.State.RESTORING){authorizationPhase="restoring";message.setText(R.string.drive_restoring);}
