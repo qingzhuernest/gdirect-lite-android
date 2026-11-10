@@ -222,7 +222,10 @@ public final class DriveActivity extends AppCompatActivity {
         downloadSelection=retainedSelection.items;
         try{
             long id=DriveSession.INSTANCE.lease().id();
-            if(saved!=null&&saved.getLong("browser_session",-1)==id)retainedSelection.recreate(listingContext(id));
+            if(saved!=null&&saved.getLong("browser_session",-1)==id){
+                retainedSelection.recreate(listingContext(id));
+                if(retainedSelection.preserve(listingContext(id)))listingSession=id;
+            }
             else retainedSelection.clear();
         }catch(DriveSession.AuthorizationRequired absent){retainedSelection.clear();}
         waitingResolution = saved != null && saved.getBoolean("waiting_resolution", false);
